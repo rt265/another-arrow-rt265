@@ -1,0 +1,25 @@
+[project]
+name = "another-arrow-rt265"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "watermelonabc", email = "2172718424@qq.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "ruff>=0.16.7",
+    "ty>=0.0.80",
+]
+
+[project.scripts]
+another-arrow-rt265 = "another_arrow_rt265:main"
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "nuitka>=4.2.1",
+]
