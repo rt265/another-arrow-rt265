@@ -1,7 +1,8 @@
 """游戏主循环。
 
-当前阶段只搭建“窗口 + 棋盘 + 可点击箭头”的最小可运行框架，
-关卡状态、失误次数与结算界面将在后续事项中加入。
+当前阶段实现“窗口 + 棋盘 + 点击移除箭头”的可玩流程：
+点击前方畅通的箭头会把箭头移出棋盘，撞到其他箭头时给出闪烁提示。
+失误次数、结算界面与飞出动画将在后续事项中加入。
 """
 
 from __future__ import annotations
@@ -35,8 +36,9 @@ class Game:
     def run(self) -> None:
         """进入主循环，直到窗口被关闭。"""
         while self.running:
-            self.clock.tick(config.FPS)
+            dt = self.clock.tick(config.FPS) / 1000.0
             self._handle_events()
+            self.board.update(dt)
             self._draw()
         pygame.quit()
 

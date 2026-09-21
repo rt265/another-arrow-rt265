@@ -1,7 +1,7 @@
 """棋盘的数据结构与绘制。
 
-本模块负责把关卡的字符网格转换为箭头布局，并完成棋盘的绘制与鼠标命中判定。
-本阶段仅实现“摆放可点击的箭头”，箭头的飞出与碰撞检测留待后续实现。
+本模块负责把关卡的字符网格转换为箭头布局，完成棋盘的绘制、鼠标命中判定，
+以及箭头飞出前的碰撞检测与移除。箭头的飞出动画与关卡结算将在后续事项中实现。
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass
+from enum import Enum
 from typing import Final
 
 import pygame
@@ -40,6 +41,19 @@ class Arrow:
     direction: Direction
 
 
+class ClickResult(Enum):
+    """一次鼠标点击的处理结果。"""
+
+    MISS = "miss"
+    """没有点中任何箭头。"""
+
+    CLEARED = "cleared"
+    """点中的箭头前方无阻挡，已飞出棋盘。"""
+
+    BLOCKED = "blocked"
+    """点中的箭头前方有其他箭头阻挡，无法飞出。"""
+
+
 class Board:
     """一块按网格摆放箭头的棋盘。"""
 
@@ -69,6 +83,8 @@ class Board:
         )
         self.rect.center = area.center
         self.selected: Arrow | None = None
+        self._blocked_flash: Arrow | None = None
+        self._flash_remaining: float = 0.0
 
     def __iter__(self) -> Iterator[Arrow]:
         """按行优先顺序遍历棋盘上仍在场的箭头。"""
@@ -81,6 +97,21 @@ class Board:
     def arrows(self) -> list[Arrow]:
         """当前棋盘上的全部箭头。"""
         return list(self)
+
+    @property
+    def remaining(self) -> int:
+        """当前棋盘上剩余的箭头数量。"""
+        return sum(1 for _ in self)
+
+    @property
+    def is_cleared(self) -> bool:
+        """棋盘上的箭头是否已经全部清除。"""
+        return self.remaining == 0
+
+    @property
+    def blocked_flash(self) -> Arrow | None:
+        """当前正在显示碰撞提示的箭头，没有则返回 ``None``。"""
+        return self._blocked_flash
 
     def cell_rect(self, row: int, col: int) -> pygame.Rect:
         """返回某个格子在屏幕上的矩形区域（已扣除格子间隙）。"""
@@ -106,10 +137,76 @@ class Board:
         row = (position[1] - self.rect.top) // self.cell_size
         return self.arrow_at(int(row), int(col))
 
-    def handle_click(self, position: tuple[int, int]) -> Arrow | None:
-        """处理一次鼠标左键点击：更新选中状态并返回被点中的箭头。"""
-        self.selected = self.hit_test(position)
-        return self.selected
+    def blocking_arrow(self, arrow: Arrow) -> Arrow | None:
+        """返回第一个阻挡 ``arrow`` 的箭头，前方畅通时返回 ``None``。
+
+        检查方式是沿 ``arrow.direction`` 逐格前进，直到离开棋盘或遇到其他箭头。
+        """
+        delta_row, delta_col = arrow.direction.delta
+        row = arrow.row + delta_row
+        col = arrow.col + delta_col
+        while 0 <= row < self.rows and 0 <= col < self.cols:
+            occupant = self._cells[row][col]
+            if occupant is not None:
+                return occupant
+            row += delta_row
+            col += delta_col
+        return None
+
+    def is_path_clear(self, arrow: Arrow) -> bool:
+        """判断 ``arrow`` 前进方向上是否不存在其他箭头。"""
+        return self.blocking_arrow(arrow) is None
+
+    def remove(self, arrow: Arrow) -> bool:
+        """把 ``arrow`` 从棋盘上移除，成功返回 ``True``。
+
+        移除会同时清理该箭头的选中状态与碰撞提示。
+        """
+        if self.arrow_at(arrow.row, arrow.col) != arrow:
+            return False
+        self._cells[arrow.row][arrow.col] = None
+        if self.selected == arrow:
+            self.selected = None
+        if self._blocked_flash == arrow:
+            self._clear_flash()
+        return True
+
+    def handle_click(self, position: tuple[int, int]) -> ClickResult:
+        """处理一次鼠标左键点击：更新选中状态并尝试移除箭头。
+
+        Returns:
+            本次点击的结果，见 :class:`ClickResult`。
+        """
+        arrow = self.hit_test(position)
+        if arrow is None:
+            self.selected = None
+            return ClickResult.MISS
+
+        if not self.is_path_clear(arrow):
+            self.selected = arrow
+            self._start_flash(arrow)
+            return ClickResult.BLOCKED
+
+        self.remove(arrow)
+        return ClickResult.CLEARED
+
+    def update(self, dt: float) -> None:
+        """推进棋盘上计时类反馈的状态，``dt`` 为上一帧耗时（秒）。"""
+        if self._blocked_flash is None:
+            return
+        self._flash_remaining = max(0.0, self._flash_remaining - dt)
+        if self._flash_remaining == 0.0:
+            self._clear_flash()
+
+    def _start_flash(self, arrow: Arrow) -> None:
+        """开始（或重新开始）对 ``arrow`` 的碰撞提示。"""
+        self._blocked_flash = arrow
+        self._flash_remaining = config.BLOCKED_FLASH_SECONDS
+
+    def _clear_flash(self) -> None:
+        """结束当前的碰撞提示。"""
+        self._blocked_flash = None
+        self._flash_remaining = 0.0
 
     def draw(self, surface: pygame.Surface) -> None:
         """把棋盘底板、格子和箭头绘制到 ``surface`` 上。"""
@@ -132,23 +229,45 @@ class Board:
             self._draw_arrow(surface, arrow)
 
     def _draw_arrow(self, surface: pygame.Surface, arrow: Arrow) -> None:
-        """绘制单个箭头，被选中的箭头使用高亮配色并带一圈描边。"""
+        """绘制单个箭头。
+
+        被选中的箭头使用高亮配色并带一圈金色描边；
+        刚刚撞到其他箭头的箭头使用警示配色，并带一圈向外扩散的红环。
+        """
         cell = self.cell_rect(arrow.row, arrow.col)
         center = cell.center
         is_selected = arrow == self.selected
 
-        chip_color = config.COLOR_CHIP_SELECTED if is_selected else config.COLOR_CHIP
-        pygame.draw.circle(surface, chip_color, center, int(cell.width * 0.44))
-        if is_selected:
+        if arrow == self._blocked_flash:
+            chip_color = config.COLOR_CHIP_BLOCKED
+            arrow_color = config.COLOR_ARROW_BLOCKED
+        elif is_selected:
+            chip_color = config.COLOR_CHIP_SELECTED
+            arrow_color = config.COLOR_ARROW_SELECTED
+        else:
+            chip_color = config.COLOR_CHIP
+            arrow_color = config.COLOR_ARROW
+
+        radius = int(cell.width * 0.44)
+        pygame.draw.circle(surface, chip_color, center, radius)
+        if arrow == self._blocked_flash:
+            progress = 1.0 - self._flash_remaining / config.BLOCKED_FLASH_SECONDS
+            pygame.draw.circle(
+                surface,
+                config.COLOR_BLOCKED_RING,
+                center,
+                int(radius * (1.0 + 0.45 * progress)),
+                width=3,
+            )
+        elif is_selected:
             pygame.draw.circle(
                 surface,
                 config.COLOR_SELECTION_RING,
                 center,
-                int(cell.width * 0.44),
+                radius,
                 width=3,
             )
 
-        arrow_color = config.COLOR_ARROW_SELECTED if is_selected else config.COLOR_ARROW
         pygame.draw.polygon(
             surface,
             arrow_color,
