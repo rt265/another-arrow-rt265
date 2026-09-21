@@ -7,6 +7,9 @@
 - 被阻挡时箭头沿前进方向抖动、前方溅出火花，并高亮提示挡路的箭头；
 - 被选中的箭头带一圈呼吸式描边。
 
+每个箭头都有自己的主题色（见 :mod:`another_arrow_rt265.palette`）：颜色由格子的
+位置决定，一关之内不会变；选中与碰撞状态只在主题色上提亮 / 染色，不换颜色身份。
+
 动画状态统一由 :meth:`Board.update` 推进，便于在无窗口环境下用固定 ``dt`` 测试。
 """
 
@@ -20,7 +23,7 @@ from typing import Final
 
 import pygame
 
-from another_arrow_rt265 import config
+from another_arrow_rt265 import config, palette
 from another_arrow_rt265.direction import Direction, from_symbol
 from another_arrow_rt265.levels import Level
 
@@ -219,6 +222,10 @@ class Board:
             inner_size,
         )
 
+    def arrow_color(self, arrow: Arrow) -> config.Color:
+        """返回 ``arrow`` 的主题色（与它所在格子绑定，整关不变）。"""
+        return palette.theme_color(arrow.row, arrow.col)
+
     def arrow_at(self, row: int, col: int) -> Arrow | None:
         """返回指定格子中的箭头，空格子或越界返回 ``None``。"""
         if 0 <= row < self.rows and 0 <= col < self.cols:
@@ -379,29 +386,33 @@ class Board:
     def _draw_arrow(self, surface: pygame.Surface, arrow: Arrow) -> None:
         """绘制棋盘上的单个箭头。
 
-        - 被选中的箭头使用高亮配色，并带一圈呼吸式金色描边；
-        - 刚刚撞到其他箭头的箭头使用警示配色，整体沿前进方向抖动，
+        - 底色是压暗过的主题色，外面再勾一圈提亮的主题色；
+        - 被选中的箭头向白色提亮，并带一圈呼吸式中性描边；
+        - 刚刚撞到其他箭头的箭头染向警示色，整体沿前进方向抖动，
           外圈是向外扩散的红环，前方另有三道火花线。
         """
         cell = self.cell_rect(arrow.row, arrow.col)
         is_selected = arrow == self.selected
         is_blocked = arrow == self._blocked_flash
+        theme = self.arrow_color(arrow)
 
-        if is_blocked:
-            chip_color = config.COLOR_CHIP_BLOCKED
-            arrow_color = config.COLOR_ARROW_BLOCKED
-        elif is_selected:
-            chip_color = config.COLOR_CHIP_SELECTED
-            arrow_color = config.COLOR_ARROW_SELECTED
-        else:
-            chip_color = config.COLOR_CHIP
-            arrow_color = config.COLOR_ARROW
+        chip_color = palette.chip_color(theme, selected=is_selected, blocked=is_blocked)
+        arrow_color = palette.glyph_color(
+            theme, selected=is_selected, blocked=is_blocked
+        )
 
         offset_x, offset_y = self.shake_offset if is_blocked else (0.0, 0.0)
         center = (cell.centerx + offset_x, cell.centery + offset_y)
         radius = cell.width * 0.44
 
         pygame.draw.circle(surface, chip_color, center, round(radius))
+        pygame.draw.circle(
+            surface,
+            palette.chip_border_color(theme, selected=is_selected, blocked=is_blocked),
+            center,
+            round(radius),
+            width=2,
+        )
         if is_blocked:
             pygame.draw.circle(
                 surface,
@@ -412,11 +423,12 @@ class Board:
             )
         elif is_selected:
             pulse = math.sin(_TWO_PI * self._elapsed / config.SELECTION_PULSE_SECONDS)
+            scale = config.SELECTION_RING_SCALE + config.SELECTION_PULSE_RATIO * pulse
             pygame.draw.circle(
                 surface,
                 config.COLOR_SELECTION_RING,
                 center,
-                round(radius * (1.0 + config.SELECTION_PULSE_RATIO * pulse)),
+                round(radius * scale),
                 width=3,
             )
 
@@ -436,10 +448,16 @@ class Board:
         size = self.cell_size - 2 * config.CELL_GAP
         layer = pygame.Surface((size, size), pygame.SRCALPHA)
         center = (size / 2.0, size / 2.0)
-        pygame.draw.circle(layer, config.COLOR_CHIP, center, round(size * 0.44))
+        radius = round(size * 0.44)
+        theme = self.arrow_color(flying.arrow)
+
+        pygame.draw.circle(layer, palette.chip_color(theme), center, radius)
+        pygame.draw.circle(
+            layer, palette.chip_border_color(theme), center, radius, width=2
+        )
         pygame.draw.polygon(
             layer,
-            config.COLOR_ARROW,
+            palette.glyph_color(theme),
             _arrow_points(center, size, flying.arrow.direction),
         )
 
@@ -461,7 +479,7 @@ class Board:
         if blocker is None:
             return
 
-        color = _mix(
+        color = palette.mix(
             config.COLOR_CELL, config.COLOR_BLOCKER_HINT, 1.0 - self.flash_progress
         )
         cell = self.cell_rect(blocked.row, blocked.col)
@@ -616,15 +634,3 @@ def _point_towards(
 
     ratio = distance / length
     return (start[0] + delta_x * ratio, start[1] + delta_y * ratio)
-
-
-def _mix(
-    color_from: config.Color, color_to: config.Color, ratio: float
-) -> config.Color:
-    """按 ``ratio``（0.0 → ``color_from``，1.0 → ``color_to``）混合两个颜色。"""
-    ratio = min(1.0, max(0.0, ratio))
-    return (
-        round(color_from[0] + (color_to[0] - color_from[0]) * ratio),
-        round(color_from[1] + (color_to[1] - color_from[1]) * ratio),
-        round(color_from[2] + (color_to[2] - color_from[2]) * ratio),
-    )

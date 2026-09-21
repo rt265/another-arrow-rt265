@@ -12,6 +12,7 @@ import pytest
 from another_arrow_rt265 import config, ui
 from another_arrow_rt265.board import Board, ClickResult
 from another_arrow_rt265.game import Game, Scene
+from another_arrow_rt265.levels import LEVELS
 from another_arrow_rt265.session import GameStatus, Session
 
 
@@ -59,6 +60,22 @@ def _settle(session: Session) -> None:
         session.update(1.0 / config.FPS)
     msg = "会话始终没有进入结算状态"
     raise AssertionError(msg)
+
+
+def _waste_all_mistakes(session: Session) -> None:
+    """反复点击同一个被阻挡的箭头，直到失误次数耗尽、本关失败。"""
+    while session.is_playing:
+        blocked = next(
+            (
+                arrow
+                for arrow in session.board.arrows
+                if not session.board.is_path_clear(arrow)
+            ),
+            None,
+        )
+        assert blocked is not None, "这一关没有可以制造失误的箭头"
+        session.click(session.board.cell_rect(blocked.row, blocked.col).center)
+    assert session.status is GameStatus.FAILED
 
 
 def test_clicking_the_board_clears_a_free_arrow(game: Game) -> None:
@@ -204,7 +221,7 @@ def test_start_screen_ignores_in_game_shortcuts() -> None:
     assert game.session.level_number == 1
 
 
-def test_clearing_the_last_level_returns_to_the_start_screen() -> None:
+def test_last_level_primary_button_starts_a_new_round() -> None:
     game = Game()
     game.start()
     session = game.session
@@ -213,9 +230,59 @@ def test_clearing_the_last_level_returns_to_the_start_screen() -> None:
     _clear_board(session.board)
     _settle(session)
     assert session.status is GameStatus.LEVEL_CLEARED
-    assert ui.overlay_button_text(session) == "回到主界面"
+    assert ui.overlay_button_text(session) == "再来一轮"
 
     _post_click(game, ui.overlay_button_rect().center)
+    assert game.scene is Scene.PLAYING
+    assert session.level_number == 1
+    assert session.mistakes_left == session.max_mistakes
+
+
+# ---------------------------------------------------------------- 回到主界面
+
+
+@pytest.mark.parametrize("level_index", range(len(LEVELS)))
+def test_every_level_has_a_back_to_menu_button_in_the_hud(level_index: int) -> None:
+    game = Game()
+    game.start()
+    session = game.session
+    session.load_level(level_index)
+
+    _post_click(game, ui.hud_home_button_rect().center)
+
+    assert game.scene is Scene.START
+    assert session.level_number == 1
+    assert session.mistakes_left == session.max_mistakes
+    assert session.status is GameStatus.PLAYING
+
+
+def test_home_key_returns_to_the_start_screen(game: Game) -> None:
+    _post_key(game, pygame.K_h)
+    assert game.scene is Scene.START
+
+
+def test_won_level_has_a_back_to_menu_button_on_the_result_screen() -> None:
+    game = Game()
+    game.start()
+    session = game.session
+    _clear_board(session.board)
+    _settle(session)
+    assert session.status is GameStatus.LEVEL_CLEARED
+
+    _post_click(game, ui.overlay_home_button_rect().center)
+    assert game.scene is Scene.START
+    assert session.level_number == 1
+
+
+def test_failed_level_has_a_back_to_menu_button_on_the_result_screen() -> None:
+    game = Game()
+    game.start()
+    session = game.session
+    session.load_level(2)
+    _waste_all_mistakes(session)
+    assert session.status is GameStatus.FAILED
+
+    _post_click(game, ui.overlay_home_button_rect().center)
     assert game.scene is Scene.START
     assert session.level_number == 1
     assert session.mistakes_left == session.max_mistakes
@@ -231,3 +298,33 @@ def test_draw_renders_the_start_screen_frame() -> None:
     game = Game()
     game._draw()
     assert game.scene is Scene.START
+
+
+# ---------------------------------------------------------------- 关卡计时器
+
+
+def test_timer_advances_with_the_game_loop(game: Game) -> None:
+    assert game.session.elapsed == 0.0
+
+    game._update(0.5)
+    assert game.session.elapsed == pytest.approx(0.5)
+
+    # 结算界面（通关或失败）已经没有“在解谜”的时间，不再走表。
+    game.session.status = GameStatus.LEVEL_CLEARED
+    game._update(1.0)
+    assert game.session.elapsed == pytest.approx(0.5)
+
+
+def test_timer_does_not_run_on_the_start_screen() -> None:
+    game = Game()
+    game._update(2.0)
+    assert game.session.elapsed == 0.0, "开始界面不应该给关卡计时"
+
+    game.start()
+    game._update(0.25)
+    assert game.session.elapsed == pytest.approx(0.25)
+
+    # 回到主界面会把会话退回第 1 关的初始状态，计时器一并归零。
+    game.return_to_start()
+    game._update(1.0)
+    assert game.session.elapsed == 0.0

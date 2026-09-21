@@ -1,18 +1,21 @@
 """开始界面、信息栏（HUD）与结算覆盖层的绘制。
 
 本模块只负责“画”，不修改任何游戏状态：按钮位置由 :func:`start_button_rect`、
-:func:`restart_button_rect` 与 :func:`overlay_button_rect` 暴露给
+:func:`hud_home_button_rect`、:func:`restart_button_rect`、
+:func:`overlay_button_rect` 与 :func:`overlay_home_button_rect` 暴露给
 :class:`~another_arrow_rt265.game.Game` 做命中判定，因此以后调排版只需要改这一个文件。
 
 窗口一共有三种画面：
 
 - 开始界面：标题、方向箭头装饰、主按钮与“玩法”说明卡片；
-- 进行中：显示关卡号、剩余箭头数、剩余失误圆点与“重新开始”按钮；
-- 通关 / 失败：叠加遮罩与卡片，主按钮为“下一关”（最后一关则是“回到主界面”）。
+- 进行中：左上角“回到主界面”、关卡 / 剩余箭头 / 用时 / 失误四块统计卡片，
+  右侧“重新开始”按钮；
+- 通关 / 失败：叠加遮罩与卡片（正文下方额外报一下本关用时），
+  底部并排“回到主界面”与主按钮（下一关 / 重试本关 / 再来一轮）。
 
 组件的视觉效果统一由 :func:`_draw_panel` / :func:`_draw_primary_button` /
 :func:`_draw_secondary_button` 提供：圆角渐变底板 + 描边 + 柔和投影，配色取自
-``config`` 的“界面”一节。
+``config`` 的“界面”一节；按钮上的小图标来自 :mod:`another_arrow_rt265.icons`。
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from typing import Final
 
 import pygame
 
-from another_arrow_rt265 import config
+from another_arrow_rt265 import config, icons
 from another_arrow_rt265.direction import Direction
 from another_arrow_rt265.session import GameStatus, Session
 
@@ -53,27 +56,42 @@ _FONT_SUBTITLE: Final[int] = 20
 _FONT_RULE_TITLE: Final[int] = 19
 _FONT_RULE: Final[int] = 17
 
-# 信息栏：三块统计卡片（关卡 / 剩余箭头 / 失误）与重新开始按钮。
+# 信息栏：左上角“回到主界面”图标按钮、四块统计卡片（关卡 / 剩余箭头 / 用时 /
+# 失误）与右侧“重新开始”按钮。窗口宽度有限，四块卡片加两个按钮刚好铺满一行：
+# 卡片宽度按“最宽的那行字 + 两侧留白”取（用时读数最长，居中排布时最占地方），
+# 卡片之间的间隙统一取 10，改动任何一项宽度前先把 720 这行账重新算一遍。
+_HUD_ICON_BUTTON_SIZE: Final[tuple[int, int]] = (48, 48)
+_HUD_NAV_GAP: Final[int] = 12
 _HUD_CHIP_HEIGHT: Final[int] = 72
-_HUD_CHIP_WIDTHS: Final[tuple[int, int, int]] = (140, 158, 140)
-_HUD_CHIP_GAP: Final[int] = 12
+_HUD_CHIP_WIDTHS: Final[tuple[int, int, int, int]] = (92, 104, 120, 100)
+_HUD_CHIP_GAP: Final[int] = 10
 _HUD_CHIP_RADIUS: Final[int] = 20
-_HUD_CHIP_PADDING: Final[int] = 18
+_HUD_CHIP_PADDING: Final[int] = 16
 _HUD_CHIP_CAPTION_TOP: Final[int] = 11
 _HUD_CHIP_VALUE_TOP: Final[int] = 34
-# 统计卡片与重新开始按钮之间的间隙。
-_HUD_CHIP_BUTTON_GAP: Final[int] = 20
+# 统计卡片与右侧按钮之间的间隙（与卡片之间的间隙保持一致）。
+_HUD_CHIP_BUTTON_GAP: Final[int] = 10
 
 _MISTAKE_RADIUS: Final[int] = 7
 _MISTAKE_SPACING: Final[int] = 22
-_RESTART_BUTTON_SIZE: Final[tuple[int, int]] = (152, 46)
+_RESTART_BUTTON_SIZE: Final[tuple[int, int]] = (140, 46)
 
-# 结算卡片：徽章 / 标题 / 正文 / 提示 / 主按钮自上而下排列。
+# 按钮上的小图标：尺寸与“图标与文字之间的间隙”。
+_BUTTON_ICON_SIZE: Final[int] = 20
+_BUTTON_ICON_GAP: Final[int] = 10
+
+# 结算卡片：徽章 / 标题 / 正文 / 用时 / 底部按钮行自上而下排列。
+# 底部并排放“回到主界面”与主按钮，两个按钮一起在卡片里居中。
 _CARD_SIZE: Final[tuple[int, int]] = (460, 340)
 _CARD_RADIUS: Final[int] = 30
 _CARD_EMBLEM_TOP: Final[int] = 72
+_CARD_TITLE_TOP: Final[int] = 140
+_CARD_BODY_TOP: Final[int] = 184
+# 用时单独占一行：它既是成绩也是“要不要再来一遍”的理由。
+_CARD_TIME_TOP: Final[int] = 212
 _OVERLAY_EMBLEM_RADIUS: Final[int] = 36
-_OVERLAY_BUTTON_SIZE: Final[tuple[int, int]] = (240, 56)
+_OVERLAY_BUTTON_SIZE: Final[tuple[int, int]] = (196, 56)
+_OVERLAY_BUTTON_GAP: Final[int] = 16
 _OVERLAY_BUTTON_MARGIN: Final[int] = 34
 
 # 开始界面：标题、方向箭头装饰、主按钮与“玩法”卡片。
@@ -367,20 +385,39 @@ def hud_rect() -> pygame.Rect:
     return pygame.Rect(0, 0, config.WINDOW_WIDTH, config.HUD_HEIGHT)
 
 
-def hud_chip_rects() -> tuple[pygame.Rect, pygame.Rect, pygame.Rect]:
-    """返回信息栏三块统计卡片（关卡 / 剩余箭头 / 失误）的区域。
+def hud_home_button_rect() -> pygame.Rect:
+    """返回信息栏左上角“回到主界面”图标按钮的区域。"""
+    width, height = _HUD_ICON_BUTTON_SIZE
+    return pygame.Rect(
+        config.HUD_PADDING,
+        (config.HUD_HEIGHT - height) // 2,
+        width,
+        height,
+    )
 
-    前两块从左往右排，第三块贴住“重新开始”按钮左侧，因此按钮宽度变化时
-    失误卡片的间距仍然保持一致。
+
+def hud_chip_rects() -> tuple[pygame.Rect, pygame.Rect, pygame.Rect, pygame.Rect]:
+    """返回信息栏四块统计卡片（关卡 / 剩余箭头 / 用时 / 失误）的区域。
+
+    前三块从左往右排在“回到主界面”按钮之后，第四块贴住“重新开始”按钮左侧，
+    因此按钮宽度变化时两端的间距仍然保持一致。
     """
     top = (config.HUD_HEIGHT - _HUD_CHIP_HEIGHT) // 2
-    level = pygame.Rect(config.HUD_PADDING, top, _HUD_CHIP_WIDTHS[0], _HUD_CHIP_HEIGHT)
+    level = pygame.Rect(
+        hud_home_button_rect().right + _HUD_NAV_GAP,
+        top,
+        _HUD_CHIP_WIDTHS[0],
+        _HUD_CHIP_HEIGHT,
+    )
     arrows = pygame.Rect(
         level.right + _HUD_CHIP_GAP, top, _HUD_CHIP_WIDTHS[1], _HUD_CHIP_HEIGHT
     )
-    mistakes = pygame.Rect(0, top, _HUD_CHIP_WIDTHS[2], _HUD_CHIP_HEIGHT)
+    elapsed = pygame.Rect(
+        arrows.right + _HUD_CHIP_GAP, top, _HUD_CHIP_WIDTHS[2], _HUD_CHIP_HEIGHT
+    )
+    mistakes = pygame.Rect(0, top, _HUD_CHIP_WIDTHS[3], _HUD_CHIP_HEIGHT)
     mistakes.right = restart_button_rect().left - _HUD_CHIP_BUTTON_GAP
-    return (level, arrows, mistakes)
+    return (level, arrows, elapsed, mistakes)
 
 
 def restart_button_rect() -> pygame.Rect:
@@ -416,23 +453,75 @@ def overlay_card_rect() -> pygame.Rect:
     return card
 
 
+def overlay_home_button_rect() -> pygame.Rect:
+    """返回结算界面“回到主界面”按钮的区域（在按钮行左侧）。"""
+    return _overlay_button_row()[0]
+
+
 def overlay_button_rect() -> pygame.Rect:
-    """返回结算界面主按钮的区域。"""
+    """返回结算界面主按钮的区域（在按钮行右侧）。"""
+    return _overlay_button_row()[1]
+
+
+def _overlay_button_row() -> tuple[pygame.Rect, pygame.Rect]:
+    """返回结算界面底部两个按钮的区域 ``(回到主界面, 主按钮)``。
+
+    两个按钮等宽并排，整体在卡片里居中；绘制与命中判定共用这一份坐标。
+    """
     card = overlay_card_rect()
     width, height = _OVERLAY_BUTTON_SIZE
-    return pygame.Rect(
-        card.centerx - width // 2,
-        card.bottom - _OVERLAY_BUTTON_MARGIN - height,
-        width,
-        height,
-    )
+    top = card.bottom - _OVERLAY_BUTTON_MARGIN - height
+    row_width = 2 * width + _OVERLAY_BUTTON_GAP
+    left = card.centerx - row_width // 2
+    home = pygame.Rect(left, top, width, height)
+    primary = pygame.Rect(left + width + _OVERLAY_BUTTON_GAP, top, width, height)
+    return (home, primary)
 
 
 def overlay_button_text(session: Session) -> str:
-    """返回结算界面主按钮的文案，与 ``Session`` 的流转保持一致。"""
+    """返回结算界面主按钮的文案，与 ``Session`` 的流转保持一致。
+
+    “回到主界面”始终由旁边的次要按钮提供，因此最后一关通关时主按钮
+    改为“再来一轮”，不重复同一个动作。
+    """
     if session.status is GameStatus.FAILED:
         return "重试本关"
-    return "回到主界面" if session.is_last_level else "下一关"
+    return "再来一轮" if session.is_last_level else "下一关"
+
+
+def overlay_primary_icon(session: Session) -> icons.Icon:
+    """返回结算界面主按钮上的图标，与 :func:`overlay_button_text` 对应。"""
+    if session.status is GameStatus.FAILED:
+        return icons.Icon.RESTART
+    return icons.Icon.RESTART if session.is_last_level else icons.Icon.NEXT
+
+
+def elapsed_text(seconds: float) -> str:
+    """把秒数格式化成 ``分:秒.十分位``（如 ``0:12.3``）。
+
+    先把时间取整到十分之一秒再做进位，因此 ``59.96`` 秒显示为 ``1:00.0``
+    而不是 ``0:60.0``；负数按 0 处理，避免把动画误差显示成负时间。
+    """
+    tenths = round(max(0.0, seconds) * 10)
+    minutes, rest = divmod(tenths, 600)
+    return f"{minutes}:{rest / 10:04.1f}"
+
+
+def result_time_text(session: Session) -> str:
+    """返回结算卡片上的用时文案。
+
+    通关时额外报一下本关最佳成绩：刚刷新记录就说“新纪录”，否则和这一把的
+    用时并排显示，让玩家知道差在哪里。
+    """
+    elapsed = elapsed_text(session.elapsed)
+    if session.status is not GameStatus.LEVEL_CLEARED:
+        return f"本关用时 {elapsed}"
+    if session.is_new_record:
+        return f"新纪录 · 用时 {elapsed}"
+    best = session.best_time
+    if best is None:
+        return f"本关用时 {elapsed}"
+    return f"本关用时 {elapsed} · 最佳 {elapsed_text(best)}"
 
 
 def draw_ui(
@@ -444,7 +533,7 @@ def draw_ui(
 
     Args:
         surface: 绘制目标。
-        session: 当前会话，用于读取关卡号、剩余箭头与失误次数。
+        session: 当前会话，用于读取关卡号、剩余箭头、本关用时与失误次数。
         mouse: 鼠标位置，仅用于按钮的悬停高亮；为 ``None`` 时不显示悬停效果。
     """
     draw_hud(surface, session, mouse)
@@ -457,9 +546,10 @@ def draw_hud(
     session: Session,
     mouse: tuple[int, int] | None = None,
 ) -> None:
-    """绘制信息栏：关卡 / 剩余箭头 / 失误三块统计卡片 + 重新开始按钮。"""
-    level_rect, arrows_rect, mistakes_rect = hud_chip_rects()
+    """绘制信息栏：回到主界面 / 四块统计卡片 / 重新开始按钮。"""
+    level_rect, arrows_rect, elapsed_rect, mistakes_rect = hud_chip_rects()
 
+    _draw_icon_button(surface, hud_home_button_rect(), icons.Icon.HOME, mouse)
     _draw_stat_chip(
         surface,
         level_rect,
@@ -474,9 +564,20 @@ def draw_hud(
         str(session.arrows_left),
         config.COLOR_TEXT,
     )
+    # 读秒时只有十分位在跳，右对齐能让它待在原地不动，不会每 0.1 秒抽一下。
+    _draw_stat_chip(
+        surface,
+        elapsed_rect,
+        "用时",
+        elapsed_text(session.elapsed),
+        config.COLOR_TIME,
+        align_right=True,
+    )
     _draw_mistake_chip(surface, mistakes_rect, session)
 
-    _draw_secondary_button(surface, restart_button_rect(), "重新开始", mouse)
+    _draw_secondary_button(
+        surface, restart_button_rect(), "重新开始", mouse, icon=icons.Icon.RESTART
+    )
 
 
 def draw_overlay(
@@ -484,7 +585,7 @@ def draw_overlay(
     session: Session,
     mouse: tuple[int, int] | None = None,
 ) -> None:
-    """绘制结算界面：整屏遮罩 + 居中卡片（徽章 / 标题 / 文案 / 主按钮）。"""
+    """绘制结算界面：整屏遮罩 + 居中卡片（徽章 / 标题 / 文案 / 用时 / 底部按钮行）。"""
     surface.blit(_shade(surface.get_size()), (0, 0))
 
     cleared = session.status is GameStatus.LEVEL_CLEARED
@@ -508,20 +609,38 @@ def draw_overlay(
     title = _font(_FONT_TITLE).render(
         "关卡完成！" if cleared else "挑战失败", True, accent
     )
-    surface.blit(title, title.get_rect(center=(card.centerx, card.top + 140)))
+    surface.blit(
+        title, title.get_rect(center=(card.centerx, card.top + _CARD_TITLE_TOP))
+    )
 
     body = _font(_FONT_BODY).render(_result_message(session), True, config.COLOR_TEXT)
-    surface.blit(body, body.get_rect(center=(card.centerx, card.top + 188)))
+    surface.blit(body, body.get_rect(center=(card.centerx, card.top + _CARD_BODY_TOP)))
 
-    hint = _font(_FONT_CAPTION).render(
-        f"按 Enter 或空格：{overlay_button_text(session)}",
+    # 刷新记录时这行改用主色（金），一眼就能看出“这把比之前快”。
+    record = session.status is GameStatus.LEVEL_CLEARED and session.is_new_record
+    timing = _font(_FONT_BODY).render(
+        result_time_text(session),
         True,
-        config.COLOR_TEXT_MUTED,
+        config.COLOR_PRIMARY if record else config.COLOR_TEXT_MUTED,
     )
-    surface.blit(hint, hint.get_rect(center=(card.centerx, card.top + 226)))
+    surface.blit(
+        timing, timing.get_rect(center=(card.centerx, card.top + _CARD_TIME_TOP))
+    )
 
+    _draw_secondary_button(
+        surface,
+        overlay_home_button_rect(),
+        "回到主界面",
+        mouse,
+        icon=icons.Icon.HOME,
+    )
     _draw_primary_button(
-        surface, overlay_button_rect(), overlay_button_text(session), accent, mouse
+        surface,
+        overlay_button_rect(),
+        overlay_button_text(session),
+        accent,
+        mouse,
+        icon=overlay_primary_icon(session),
     )
 
 
@@ -584,25 +703,16 @@ def draw_start_screen(
     _draw_hero_title(surface)
     _draw_arrow_row(surface)
     _draw_primary_button(
-        surface, start_button_rect(), "开始游戏", config.COLOR_PRIMARY, mouse
+        surface,
+        start_button_rect(),
+        "开始游戏",
+        config.COLOR_PRIMARY,
+        mouse,
+        icon=icons.Icon.NEXT,
     )
-
-    hint = _font(_FONT_CAPTION).render(
-        "按 Enter / 空格 也可以开始", True, config.COLOR_TEXT_MUTED
-    )
-    surface.blit(hint, hint.get_rect(center=(config.WINDOW_WIDTH // 2, _START_HINT_Y)))
 
     panel = rules_panel_rect()
     _draw_rules_panel(surface, panel)
-
-    footer = _font(_FONT_CAPTION).render(
-        f"共 {session.total_levels} 关 · 每关 {session.max_mistakes} 次失误机会",
-        True,
-        config.COLOR_TEXT_MUTED,
-    )
-    surface.blit(
-        footer, footer.get_rect(center=(config.WINDOW_WIDTH // 2, panel.bottom + 38))
-    )
 
 
 def _draw_hero_title(surface: pygame.Surface) -> None:
@@ -711,15 +821,26 @@ def _draw_stat_chip(
     caption: str,
     value: str,
     value_color: config.Color,
+    *,
+    align_right: bool = False,
 ) -> None:
-    """画一块“小标题 + 大数值”的统计卡片。"""
+    """画一块“小标题 + 大数值”的统计卡片。
+
+    ``align_right`` 让数值靠右对齐（计时器用：读秒时只有十分位在变，
+    右对齐才能让它待在原地）。
+    """
     _draw_chip_frame(surface, rect)
     surface.blit(
         _font(_FONT_LABEL).render(caption, True, config.COLOR_TEXT_MUTED),
         (rect.left + _HUD_CHIP_PADDING, rect.top + _HUD_CHIP_CAPTION_TOP),
     )
     label = _font(_FONT_CHIP_VALUE).render(value, True, value_color)
-    surface.blit(label, (rect.left + _HUD_CHIP_PADDING, rect.top + _HUD_CHIP_VALUE_TOP))
+    left = (
+        rect.right - _HUD_CHIP_PADDING - label.get_width()
+        if align_right
+        else rect.left + _HUD_CHIP_PADDING
+    )
+    surface.blit(label, (left, rect.top + _HUD_CHIP_VALUE_TOP))
 
 
 def _draw_mistake_chip(
@@ -737,7 +858,9 @@ def _draw_mistake_chip(
     )
 
     center_y = rect.top + _HUD_CHIP_VALUE_TOP + 15
-    first_x = rect.left + _HUD_CHIP_PADDING + _MISTAKE_RADIUS
+    # 圆点整组在卡片里居中，与前后的“剩余箭头 / 重新开始”对齐得好看一些。
+    span = (session.max_mistakes - 1) * _MISTAKE_SPACING
+    first_x = rect.centerx - span // 2
     for index in range(session.max_mistakes):
         center = (first_x + index * _MISTAKE_SPACING, center_y)
         color = (
@@ -753,8 +876,9 @@ def _draw_secondary_button(
     rect: pygame.Rect,
     text: str,
     mouse: tuple[int, int] | None = None,
+    icon: icons.Icon | None = None,
 ) -> None:
-    """画深色的次要按钮（重新开始），鼠标悬停时提亮。"""
+    """画深色的次要按钮（重新开始 / 回到主界面），鼠标悬停时提亮。"""
     hovered = mouse is not None and rect.collidepoint(mouse)
     top = config.COLOR_BUTTON_TOP_HOVER if hovered else config.COLOR_BUTTON_TOP
     bottom = config.COLOR_BUTTON_BOTTOM_HOVER if hovered else config.COLOR_BUTTON_BOTTOM
@@ -767,8 +891,39 @@ def _draw_secondary_button(
         border=config.COLOR_BUTTON_BORDER,
         shadow_spread=6,
     )
-    label = _font(_FONT_BUTTON).render(text, True, config.COLOR_BUTTON_TEXT)
-    surface.blit(label, label.get_rect(center=rect.center))
+    _draw_button_content(surface, rect, text, config.COLOR_BUTTON_TEXT, icon)
+
+
+def _draw_icon_button(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    icon: icons.Icon,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """画一个只有图标的按钮（信息栏左上角的“回到主界面”）。
+
+    图形本身没有文字，因此用方位（左上角）与描边强调色向“可点”靠拢：
+    悬停时提亮，和旁边带文字的按钮保持同一套外观。
+    """
+    hovered = mouse is not None and rect.collidepoint(mouse)
+    top = config.COLOR_BUTTON_TOP_HOVER if hovered else config.COLOR_BUTTON_TOP
+    bottom = config.COLOR_BUTTON_BOTTOM_HOVER if hovered else config.COLOR_BUTTON_BOTTOM
+    _draw_panel(
+        surface,
+        rect,
+        top,
+        bottom,
+        radius=rect.height // 2,
+        border=config.COLOR_BUTTON_BORDER,
+        shadow_spread=6,
+    )
+    icons.draw_icon(
+        surface,
+        icon,
+        rect.center,
+        round(rect.width * 0.46),
+        config.COLOR_BUTTON_TEXT,
+    )
 
 
 def _draw_primary_button(
@@ -777,6 +932,7 @@ def _draw_primary_button(
     text: str,
     accent: config.Color,
     mouse: tuple[int, int] | None = None,
+    icon: icons.Icon | None = None,
 ) -> None:
     """画填充强调色的主按钮，鼠标悬停时更亮并带一圈外发光。"""
     hovered = mouse is not None and rect.collidepoint(mouse)
@@ -792,5 +948,30 @@ def _draw_primary_button(
         border=_mix(accent, (255, 255, 255), 0.35),
         shadow_spread=8,
     )
-    label = _font(_FONT_BUTTON).render(text, True, config.COLOR_ON_PRIMARY)
-    surface.blit(label, label.get_rect(center=rect.center))
+    _draw_button_content(surface, rect, text, config.COLOR_ON_PRIMARY, icon)
+
+
+def _draw_button_content(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    text: str,
+    color: config.Color,
+    icon: icons.Icon | None = None,
+) -> None:
+    """把“图标 + 文字”当成一个整体在按钮里居中。"""
+    label = _font(_FONT_BUTTON).render(text, True, color)
+    content_width = label.get_width()
+    if icon is not None:
+        content_width += _BUTTON_ICON_SIZE + _BUTTON_ICON_GAP
+
+    left = rect.centerx - content_width // 2
+    if icon is not None:
+        icons.draw_icon(
+            surface,
+            icon,
+            (left + _BUTTON_ICON_SIZE // 2, rect.centery),
+            _BUTTON_ICON_SIZE,
+            color,
+        )
+        left += _BUTTON_ICON_SIZE + _BUTTON_ICON_GAP
+    surface.blit(label, (left, rect.centery - label.get_height() // 2))

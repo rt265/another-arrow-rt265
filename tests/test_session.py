@@ -26,6 +26,13 @@ PAIR_LEVEL: Level = (
     "...",
 )
 
+# 只有一支箭头的关卡：点一下就能清空棋盘，用来观察计时器何时停表。
+SOLO_LEVEL: Level = (
+    ".^.",
+    "...",
+    "...",
+)
+
 
 def _arrow(session: Session, row: int, col: int) -> Arrow:
     """取出指定格子的箭头，顺便断言它确实存在。"""
@@ -72,6 +79,14 @@ def _step_until_settled(session: Session) -> None:
         session.update(1.0 / config.FPS)
     msg = "会话始终没有进入结算状态"
     raise AssertionError(msg)
+
+
+def _clear_solo_level(session: Session, seconds: float) -> None:
+    """让“只有一支箭头”的关卡在指定的用时时长（秒）之后通关。"""
+    session.update(seconds)
+    assert _click(session, _arrow(session, 0, 1)) is ClickResult.CLEARED
+    _step_until_settled(session)
+    assert session.status is GameStatus.LEVEL_CLEARED
 
 
 # ---------------------------------------------------------------- 初始状态
@@ -250,3 +265,96 @@ def test_load_level_switches_level_and_resets_mistakes() -> None:
     assert session.level_number == 2
     assert session.mistakes_left == 2
     assert session.arrows_left == _count_arrows(LEVELS[0])
+
+
+# ---------------------------------------------------------------- 关卡计时器
+
+
+def test_timer_starts_at_zero_and_counts_every_update() -> None:
+    session = Session(AREA, levels=(PAIR_LEVEL,))
+    assert session.elapsed == 0.0
+    assert session.best_time is None
+    assert session.is_new_record is False
+
+    session.update(0.5)
+    session.update(0.25)
+    assert session.elapsed == pytest.approx(0.75)
+
+
+def test_timer_stops_at_the_click_that_clears_the_board() -> None:
+    session = Session(AREA, levels=(SOLO_LEVEL,))
+    session.update(0.4)
+
+    assert _click(session, _arrow(session, 0, 1)) is ClickResult.CLEARED
+    assert session.arrows_left == 0
+
+    # 飞出动画与结算停顿都不计入：停表的时刻就是最后一步点击。
+    session.update(1.0 / config.FPS)
+    assert session.status is GameStatus.PLAYING
+    assert session.elapsed == pytest.approx(0.4)
+
+    _step_until_settled(session)
+    assert session.status is GameStatus.LEVEL_CLEARED
+    assert session.elapsed == pytest.approx(0.4)
+
+
+def test_timer_stops_when_the_level_fails() -> None:
+    session = Session(AREA, levels=(CROSS_LEVEL,), max_mistakes=1)
+    session.update(0.3)
+
+    assert session.click(session.board.cell_rect(0, 1).center) is ClickResult.BLOCKED
+    assert session.status is GameStatus.FAILED
+
+    session.update(1.0)
+    assert session.elapsed == pytest.approx(0.3)
+
+
+def test_restart_resets_the_timer_but_keeps_the_best_time() -> None:
+    session = Session(AREA, levels=(SOLO_LEVEL,))
+    _clear_solo_level(session, 1.0)
+
+    assert session.is_new_record is True
+    assert session.best_time == pytest.approx(1.0)
+
+    session.restart_level()
+    assert session.elapsed == 0.0
+    assert session.is_new_record is False
+    assert session.best_time == pytest.approx(1.0)
+
+
+def test_best_time_only_keeps_the_fastest_run() -> None:
+    session = Session(AREA, levels=(SOLO_LEVEL,))
+
+    _clear_solo_level(session, 2.0)
+    assert session.is_new_record is True
+
+    session.restart_level()
+    _clear_solo_level(session, 3.0)
+    assert session.is_new_record is False
+    assert session.best_time == pytest.approx(2.0)
+
+    session.restart_level()
+    _clear_solo_level(session, 1.5)
+    assert session.is_new_record is True
+    assert session.best_time == pytest.approx(1.5)
+
+
+def test_best_times_are_tracked_per_level() -> None:
+    session = Session(AREA, levels=(SOLO_LEVEL, PAIR_LEVEL))
+    _clear_solo_level(session, 1.0)
+
+    session.advance()
+    assert session.elapsed == 0.0
+    assert session.best_time is None, "第 2 关还没通关过，不该有成绩"
+
+
+def test_switching_levels_resets_the_timer() -> None:
+    session = Session(AREA, levels=(PAIR_LEVEL, SOLO_LEVEL))
+    session.update(0.6)
+
+    session.advance()
+    assert session.elapsed == 0.0
+
+    session.update(0.2)
+    session.load_level(0)
+    assert session.elapsed == 0.0

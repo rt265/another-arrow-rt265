@@ -5,7 +5,7 @@ from __future__ import annotations
 import pygame
 import pytest
 
-from another_arrow_rt265 import config
+from another_arrow_rt265 import config, palette
 from another_arrow_rt265.board import Arrow, Board, ClickResult
 from another_arrow_rt265.direction import Direction, from_symbol
 from another_arrow_rt265.levels import LEVELS
@@ -456,3 +456,102 @@ def test_draw_handles_blocked_and_flying_arrows() -> None:
     board.update(config.FLY_OUT_SECONDS)
     board.draw(surface)
     assert board.flying == []
+
+
+# ---------------------------------------------------------------- 彩色箭头
+
+
+def _render(board: Board) -> pygame.Surface:
+    """把棋盘画在纯黑画布上——颜色测试看的就是“真正画出来的像素”。"""
+    surface = pygame.Surface(AREA.size)
+    surface.fill((0, 0, 0))
+    board.draw(surface)
+    return surface
+
+
+def _pixel_at(surface: pygame.Surface, position: tuple[int, int]) -> config.Color:
+    """读取某个像素的 RGB。"""
+    pixel = surface.get_at(position)
+    return (int(pixel[0]), int(pixel[1]), int(pixel[2]))
+
+
+def _cell_center_pixel(
+    board: Board, surface: pygame.Surface, arrow: Arrow
+) -> config.Color:
+    """取箭头所在格子中心的像素：那里一定落在箭头图形上，与朝向无关。"""
+    return _pixel_at(surface, board.cell_rect(arrow.row, arrow.col).center)
+
+
+def test_arrow_color_comes_from_the_palette_and_stays_stable() -> None:
+    """颜色跟格子绑定：清掉别的箭头、重新构造本关，剩下的箭头都不会换色。"""
+    board = Board(LEVELS[2], AREA)
+    colors = {arrow: board.arrow_color(arrow) for arrow in board.arrows}
+    assert len(set(colors.values())) > 1, "整个棋盘只有一种颜色，谈不上彩色箭头"
+    for arrow, color in colors.items():
+        assert color == palette.theme_color(arrow.row, arrow.col)
+        assert color in config.ARROW_PALETTE
+
+    cleared = [arrow for arrow in board.arrows if board.is_path_clear(arrow)]
+    assert cleared, "第 3 关应当至少有一支可清除的箭头"
+    for arrow in cleared:
+        assert _click(board, arrow) is ClickResult.CLEARED
+
+    assert board.remaining == len(colors) - len(cleared)
+    for arrow in board:
+        assert board.arrow_color(arrow) == colors[arrow]
+
+    # 重新开始本关（重新构造棋盘）后，颜色布局完全一致。
+    replay = Board(LEVELS[2], AREA)
+    assert {(arrow.row, arrow.col): replay.arrow_color(arrow) for arrow in replay} == {
+        (arrow.row, arrow.col): color for arrow, color in colors.items()
+    }
+
+
+def test_every_arrow_is_painted_in_its_own_theme_color() -> None:
+    """每个箭头都用主题色画出来（取格子中心，那里一定落在箭头图形里）。"""
+    level = LEVELS[2]
+    board = Board(level, AREA)
+    surface = _render(board)
+
+    painted = {
+        _cell_center_pixel(board, surface, arrow): board.arrow_color(arrow)
+        for arrow in board
+    }
+    for pixel, color in painted.items():
+        assert pixel == color
+    assert len(set(painted.values())) > 1
+
+
+def test_selected_and_blocked_colors_are_derived_from_the_theme() -> None:
+    """选中 / 碰撞只在主题色上提亮与染色，箭头依旧保留自己的颜色身份。"""
+    board = Board(CROSS_LEVEL, AREA)
+    arrow = board.arrow_at(0, 1)
+    assert arrow is not None
+    theme = board.arrow_color(arrow)
+    assert _cell_center_pixel(board, _render(board), arrow) == theme
+
+    # 碰撞：染向偏白的警示色（红色扩散环与火花另行说明“撞上了”）。
+    assert _click(board, arrow) is ClickResult.BLOCKED
+    assert _cell_center_pixel(board, _render(board), arrow) == palette.glyph_color(
+        theme, blocked=True
+    )
+
+    # 提示结束后只剩选中态：向白色提亮，颜色依然来自主题色。
+    board.update(config.BLOCKED_FLASH_SECONDS)
+    assert board.blocked_flash is None and board.selected == arrow
+    selected = palette.glyph_color(theme, selected=True)
+    assert selected != theme
+    assert _cell_center_pixel(board, _render(board), arrow) == selected
+
+
+def test_flying_arrow_keeps_its_theme_color() -> None:
+    """飞出动画画的是同一支箭头，自然也用它的主题色。"""
+    board = Board(EDGE_LEVEL, AREA)
+    arrow = board.arrow_at(0, 1)
+    assert arrow is not None
+    assert _click(board, arrow) is ClickResult.CLEARED
+
+    flying = board.flying[0]
+    assert flying.progress == 0.0  # 动画刚开始，箭头完全不透明
+    position = (round(flying.position[0]), round(flying.position[1]))
+    assert _pixel_at(_render(board), position) == board.arrow_color(arrow)

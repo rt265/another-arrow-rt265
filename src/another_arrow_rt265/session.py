@@ -4,11 +4,12 @@
 与 :mod:`another_arrow_rt265.config`，不涉及任何绘制，因此可以在没有窗口的
 环境下用固定 ``dt`` 完整地测试通关、失败与重新开始。
 
-一次会话包含三件事：
+一次会话包含四件事：
 
 - **棋盘**：交给 ``Board`` 处理点击、碰撞与动画；
 - **失误次数**：点击被阻挡的箭头时扣减，扣到 0 即本关失败；
-- **关卡进度**：棋盘清空（且飞出动画播完）后进入通关结算，再进入下一关。
+- **关卡进度**：棋盘清空（且飞出动画播完）后进入通关结算，再进入下一关；
+- **单关计时**：每关各有一个计时器，只在“还在解谜”时走字，并记住本关的最佳用时。
 """
 
 from __future__ import annotations
@@ -68,6 +69,8 @@ class Session:
         self.max_mistakes = max_mistakes
         self.status = GameStatus.PLAYING
         self._cleared_pause = 0.0
+        # 最佳用时按“关卡序号”记录，不随重开本关或回到主界面清空。
+        self._best_times: dict[int, float] = {}
         self._load(level_index % len(levels))
 
     # ------------------------------------------------------------ 只读状态
@@ -112,6 +115,29 @@ class Session:
         """是否已经通关最后一关。"""
         return self.status is GameStatus.LEVEL_CLEARED and self.is_last_level
 
+    @property
+    def elapsed(self) -> float:
+        """本关已经用掉的时间（秒），重置只发生在 :meth:`_load` 里。
+
+        计时器只统计“还在解谜”的时间：清空棋盘的瞬间就停表，之后的飞出动画、
+        结算停顿都不再计入；本关失败时也在那一次点击处停下。
+        """
+        return self._elapsed
+
+    @property
+    def best_time(self) -> float | None:
+        """本关的最佳用时（秒）；本次会话里还没通关过本关则返回 ``None``。
+
+        成绩按关卡序号记在会话上，因此重开本关、回到主界面、通关一轮再重来，
+        都不会把已经跑出来的成绩抹掉。
+        """
+        return self._best_times.get(self.level_index)
+
+    @property
+    def is_new_record(self) -> bool:
+        """刚刚这次通关是否刷新了本关的最佳用时（第一次通关也算刷新）。"""
+        return self._new_record
+
     # ------------------------------------------------------------ 规则
 
     def click(self, position: tuple[int, int]) -> ClickResult | None:
@@ -137,19 +163,40 @@ class Session:
         return result
 
     def update(self, dt: float) -> None:
-        """推进棋盘动画与结算计时，``dt`` 为上一帧耗时（秒）。"""
+        """推进棋盘动画、本关计时与结算计时，``dt`` 为上一帧耗时（秒）。"""
         self._board.update(dt)
         if not self.is_playing:
             return
 
-        if not self._board.is_cleared or self._board.flying:
-            # 还没清空，或者最后一支箭头仍在飞出画面，重新计时。
+        if self._board.is_cleared:
+            self._settle(dt)
+            return
+
+        # 棋盘还没清空：正常走表，并让结算停顿重新计时。
+        self._elapsed += dt
+        self._cleared_pause = 0.0
+
+    def _settle(self, dt: float) -> None:
+        """棋盘清空后：等飞出动画播完，再停顿一下弹出结算。
+
+        这段时间不再计入 :attr:`elapsed`——最后一步点击落下的瞬间，
+        本关的用时就已经定下来了。
+        """
+        if self._board.flying:
             self._cleared_pause = 0.0
             return
 
         self._cleared_pause += dt
         if self._cleared_pause >= config.LEVEL_CLEARED_DELAY:
-            self.status = GameStatus.LEVEL_CLEARED
+            self._finish()
+
+    def _finish(self) -> None:
+        """结算本关通关，并把用时记入本关的最佳成绩。"""
+        self.status = GameStatus.LEVEL_CLEARED
+        previous = self._best_times.get(self.level_index)
+        self._new_record = previous is None or self._elapsed < previous
+        if self._new_record:
+            self._best_times[self.level_index] = self._elapsed
 
     # ------------------------------------------------------------ 关卡流转
 
@@ -167,9 +214,15 @@ class Session:
         self._load(level_index % len(self.levels))
 
     def _load(self, level_index: int) -> None:
-        """载入关卡并重置与本关绑定的所有状态。"""
+        """载入关卡并重置与本关绑定的所有状态（包括计时器）。
+
+        “重置”指重新数一次本次挑战的用时；:attr:`best_time` 属于关卡的历史成绩，
+        因此不会被清掉。
+        """
         self.level_index = level_index
         self._board = Board(self.levels[level_index], self.area)
         self._mistakes_left = self.max_mistakes
         self.status = GameStatus.PLAYING
         self._cleared_pause = 0.0
+        self._elapsed = 0.0
+        self._new_record = False

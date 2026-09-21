@@ -50,8 +50,10 @@ FLY_OUT_EASE_POWER: Final[float] = 1.8
 BLOCKED_SHAKE_RATIO: Final[float] = 0.12
 # 碰撞抖动的往返次数，2.0 表示“撞出去再弹回来”一个来回。
 BLOCKED_SHAKE_CYCLES: Final[float] = 2.0
-# 选中箭头描边环的呼吸周期（秒）与半径变化幅度（相对半径）。
+# 选中箭头描边环的呼吸周期（秒）、相对圆片半径的基准倍数与呼吸幅度。
+# 基准倍数大于 1，让描边环落在圆片外沿之外，与圆片自己的描边区分开。
 SELECTION_PULSE_SECONDS: Final[float] = 1.1
+SELECTION_RING_SCALE: Final[float] = 1.07
 SELECTION_PULSE_RATIO: Final[float] = 0.06
 
 # ------------------------------------------------------------------ 配色
@@ -65,17 +67,48 @@ COLOR_BOARD: Final[Color] = (28, 34, 48)
 # 棋盘底板的描边，避免深色棋盘在深色背景上“糊”成一片。
 COLOR_BOARD_BORDER: Final[Color] = (50, 61, 88)
 COLOR_CELL: Final[Color] = (40, 49, 68)
+
+# 箭头的圆片底色：常态与碰撞两种基准色。
+# 它们只是“底色”，真正的颜色由基准色与箭头主题色混合得到（见 `palette.py`）；
+# 选中态则在常态底色的基础上再混入主题色，同样见 `palette.py`。
 COLOR_CHIP: Final[Color] = (26, 32, 45)
-COLOR_CHIP_SELECTED: Final[Color] = (52, 46, 30)
 COLOR_CHIP_BLOCKED: Final[Color] = (58, 14, 20)
-COLOR_ARROW: Final[Color] = (226, 232, 245)
-COLOR_ARROW_SELECTED: Final[Color] = (255, 203, 92)
+# 选中时箭头提亮的目标色，以及碰撞时箭头染向的警示色（偏白）。
+COLOR_ARROW_HIGHLIGHT: Final[Color] = (255, 255, 255)
 COLOR_ARROW_BLOCKED: Final[Color] = (255, 210, 210)
-COLOR_SELECTION_RING: Final[Color] = (255, 203, 92)
+# 选中环用接近白色的颜色：箭头主题色是彩色的，金色描边会和琥珀色主题撞在一起。
+COLOR_SELECTION_RING: Final[Color] = (238, 243, 252)
 COLOR_BLOCKED_RING: Final[Color] = (232, 64, 64)
 # 碰撞时在箭头前方溅出的火花线与“被谁挡住”的提示环。
 COLOR_BLOCKED_SPARK: Final[Color] = (255, 186, 100)
 COLOR_BLOCKER_HINT: Final[Color] = (255, 122, 122)
+
+# ------------------------------------------------------------------ 彩色箭头
+# 箭头主题色的调色板：每个箭头按“行 × ARROW_PALETTE_ROW_STEP + 列”从调色板取色，
+# 因此颜色只跟格子位置有关，一关之内稳定不变——清除别的箭头、重新开始本关，
+# 都不会让剩下的箭头换色。步长只要不是调色板长度的倍数，上下相邻的箭头就不会撞色。
+# 颜色只是视觉上的区分，不参与任何判定。
+ARROW_PALETTE: Final[tuple[Color, ...]] = (
+    (255, 118, 118),  # 珊瑚红
+    (255, 184, 86),  # 琥珀
+    (104, 222, 150),  # 薄荷
+    (92, 190, 255),  # 天蓝
+    (176, 152, 255),  # 薰衣草
+    (255, 140, 205),  # 樱粉
+)
+ARROW_PALETTE_ROW_STEP: Final[int] = 3
+
+# 主题色在各状态下的用量：圆片底色取压暗过的主题色，箭头本身用主题色。
+ARROW_CHIP_MIX: Final[float] = 0.22
+# 选中时在常态圆片上再混入主题色的比例：圆片更亮、更饱和，箭头看起来“被点亮”了。
+ARROW_CHIP_SELECTED_MIX: Final[float] = 0.30
+ARROW_CHIP_BLOCKED_MIX: Final[float] = 0.30
+# 圆片描边相对圆片底色的提亮程度。
+ARROW_CHIP_BORDER_MIX: Final[float] = 0.55
+# 选中时箭头向白色提亮的程度：轻微提亮即可，选中主要靠中性的呼吸环表达（环不能太淡）。
+ARROW_SELECTED_MIX: Final[float] = 0.18
+# 碰撞时箭头向警示白染色的程度：幅度大，看起来像“撞得发白”。
+ARROW_BLOCKED_MIX: Final[float] = 0.55
 
 # ------------------------------------------------------------------ 界面
 # 信息栏文字、按钮与失误圆点。
@@ -83,6 +116,9 @@ COLOR_TEXT: Final[Color] = (233, 238, 248)
 COLOR_TEXT_MUTED: Final[Color] = (128, 141, 168)
 COLOR_MISTAKE: Final[Color] = (238, 92, 92)
 COLOR_MISTAKE_SPENT: Final[Color] = (52, 60, 82)
+# 关卡计时器的读数：偏冷的浅蓝，与金色关卡号、红色失误点区分开。
+# 破纪录时改用主色（金）强调整一下，见 `ui.draw_overlay`。
+COLOR_TIME: Final[Color] = (146, 202, 255)
 
 # 组件外观：投影、面板底色（渐变两端）与描边色，
 # 统计卡片、开始界面的“玩法”卡片以及各种按钮都由这几个色阶推出来。
