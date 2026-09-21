@@ -3,3 +3,6 @@ build/
 .trae/
 .vscode/
 docs/agents
+.pytest_cache/
+.ruff_cache/
+__pycache__/
