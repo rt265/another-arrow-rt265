@@ -15,12 +15,27 @@ WINDOW_HEIGHT: Final[int] = 720
 WINDOW_TITLE: Final[str] = "Another Arrow"
 FPS: Final[int] = 60
 
+# ------------------------------------------------------------------ 布局
+# 顶部信息栏（关卡 / 剩余箭头 / 失误 / 重新开始按钮）的高度。
+HUD_HEIGHT: Final[int] = 96
+# 信息栏内所有元素相对窗口左右边界的留白。
+HUD_PADDING: Final[int] = 32
+# 棋盘相对窗口左右边界与底部边界的留白。
+BOARD_MARGIN: Final[int] = 40
+# 棋盘与信息栏之间额外留出的间隙，避免最大的棋盘贴住信息栏。
+BOARD_TOP_GAP: Final[int] = 24
+
 # ------------------------------------------------------------------ 棋盘
-BOARD_MARGIN: Final[int] = 48
 MAX_CELL_SIZE: Final[int] = 112
 CELL_GAP: Final[int] = 6
 BOARD_RADIUS: Final[int] = 24
 CELL_RADIUS: Final[int] = 12
+
+# ------------------------------------------------------------------ 玩法
+# 每一关允许的失误次数。
+MAX_MISTAKES: Final[int] = 3
+# 棋盘清空后、弹出通关结算前的停顿（秒），用于等最后一支箭头飞完。
+LEVEL_CLEARED_DELAY: Final[float] = 0.18
 
 # ------------------------------------------------------------------ 反馈
 # 撞到其他箭头时的闪烁提示持续时间（秒）。
@@ -54,3 +69,21 @@ COLOR_BLOCKED_RING: Final[Color] = (232, 64, 64)
 # 碰撞时在箭头前方溅出的火花线与“被谁挡住”的提示环。
 COLOR_BLOCKED_SPARK: Final[Color] = (255, 186, 100)
 COLOR_BLOCKER_HINT: Final[Color] = (255, 122, 122)
+
+# ------------------------------------------------------------------ 界面
+# 信息栏文字、按钮与失误圆点。
+COLOR_TEXT: Final[Color] = (233, 238, 248)
+COLOR_TEXT_MUTED: Final[Color] = (128, 141, 168)
+COLOR_BUTTON: Final[Color] = (46, 58, 82)
+COLOR_BUTTON_HOVER: Final[Color] = (64, 80, 110)
+COLOR_BUTTON_BORDER: Final[Color] = (88, 106, 142)
+COLOR_BUTTON_TEXT: Final[Color] = (233, 238, 248)
+COLOR_MISTAKE: Final[Color] = (238, 92, 92)
+COLOR_MISTAKE_SPENT: Final[Color] = (52, 60, 82)
+
+# 结算覆盖层：遮罩、卡片，以及通关 / 失败两种强调色。
+COLOR_OVERLAY: Final[Color] = (8, 11, 18)
+OVERLAY_ALPHA: Final[int] = 200
+COLOR_CARD: Final[Color] = (30, 37, 52)
+COLOR_SUCCESS: Final[Color] = (108, 220, 156)
+COLOR_FAILURE: Final[Color] = (238, 92, 92)
