@@ -9,12 +9,12 @@
 ## Tech Stack
 
 - Python 3.13
+- Pygame-ce
 - UV
 - Ruff
 - ty
 
 ## Installation
-
 
 ## Wiki
 

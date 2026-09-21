@@ -4,6 +4,8 @@
 
 ## Project Structure
 
+项目使用 Pygame-ce 作为游戏库，UV 作为管理器，Ruff 作为静态检查器，ty 作为类型检查器，Nuitka 作为二进制程序打包器。
+
 ```
 .
 ├─assets # 静态资源
@@ -16,7 +18,7 @@
 
 ## Log notice
 
-Agent 需要将本轮对话做出的改动汇总为 Markdown 文档，存储在[docs](/docs/)目录下，供后继 Agent 查阅。
+Agent 需要将本轮对话做出的改动汇总为 Markdown 文档，存储在 `docs/agents` 目录下，供后继 Agent 查阅。
 
 ## Copyright Notice
 

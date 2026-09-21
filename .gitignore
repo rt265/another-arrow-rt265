@@ -1,1 +1,5 @@
 .venv/
+build/
+.trae/
+.vscode/
+docs/agents
