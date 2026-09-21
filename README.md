@@ -13,6 +13,7 @@
 - UV
 - Ruff
 - ty
+- Nuitka
 
 ## Installation
 
@@ -29,7 +30,13 @@ uv sync
 启动项目：
 
 ```bash
-another-arrow-rt265
+uv run another-arrow-rt265
+```
+
+Test:
+
+```bash
+uv run pytest -q
 ```
 
 Lint：
