@@ -350,6 +350,13 @@ class Board:
         pygame.draw.rect(
             surface, config.COLOR_BOARD, panel, border_radius=config.BOARD_RADIUS
         )
+        pygame.draw.rect(
+            surface,
+            config.COLOR_BOARD_BORDER,
+            panel,
+            width=2,
+            border_radius=config.BOARD_RADIUS,
+        )
 
         for row in range(self.rows):
             for col in range(self.cols):

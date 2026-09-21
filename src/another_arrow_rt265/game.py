@@ -1,20 +1,34 @@
 """游戏主循环。
 
-本轮把各部件串成一个可玩的关卡 Demo：
+窗口由两个画面组成，切换逻辑集中在 :class:`Game` 里：
 
-- 顶部信息栏显示关卡号、剩余箭头、剩余失误与“重新开始”按钮；
-- 点击棋盘上的箭头，畅通则飞出、被阻挡则扣一次失误（见 ``board`` / ``session``）；
-- 失误耗尽弹出失败卡片，可重试本关；清空全部箭头弹出通关卡片，可进入下一关。
+- **开始界面**（:class:`Scene.START`）：标题、玩法说明与“开始游戏”按钮；
+- **游戏画面**（:class:`Scene.PLAYING`）：顶部信息栏（关卡 / 剩余箭头 / 失误 /
+  重新开始按钮）+ 棋盘，通关或失败时在棋盘之上叠一张结算卡片。
 
-按既定设计，本轮不做开始界面，启动后直接进入第 1 关。
+点击棋盘上的箭头，畅通则飞出、被阻挡则扣一次失误（见 ``board`` / ``session``）；
+失误耗尽弹出失败卡片，可重试本关；清空全部箭头弹出通关卡片，可进入下一关；
+通关最后一关后回到开始界面。
 """
 
 from __future__ import annotations
+
+from enum import Enum
 
 import pygame
 
 from another_arrow_rt265 import config, ui
 from another_arrow_rt265.session import GameStatus, Session
+
+
+class Scene(Enum):
+    """窗口当前显示的画面。"""
+
+    START = "start"
+    """开始界面：等待玩家点击“开始游戏”，此时不响应棋盘点击。"""
+
+    PLAYING = "playing"
+    """游戏画面：棋盘、信息栏与结算卡片（结算状态由 ``Session`` 决定）。"""
 
 
 class Game:
@@ -33,6 +47,7 @@ class Game:
         pygame.display.set_caption(config.WINDOW_TITLE)
         self.clock = pygame.time.Clock()
         self.running = True
+        self.scene = Scene.START
         self.session = Session(ui.board_area(), level_index=level_index)
 
     def run(self) -> None:
@@ -40,9 +55,20 @@ class Game:
         while self.running:
             dt = self.clock.tick(config.FPS) / 1000.0
             self._handle_events()
-            self.session.update(dt)
+            if self.scene is Scene.PLAYING:
+                self.session.update(dt)
             self._draw()
         pygame.quit()
+
+    def start(self) -> None:
+        """离开开始界面，从第 1 关开始新的一局。"""
+        self.session.load_level(0)
+        self.scene = Scene.PLAYING
+
+    def return_to_start(self) -> None:
+        """返回开始界面，并让会话回到第 1 关的初始状态。"""
+        self.session.load_level(0)
+        self.scene = Scene.START
 
     def _handle_events(self) -> None:
         for event in pygame.event.get():
@@ -56,11 +82,16 @@ class Game:
                 self._handle_click(event.pos)
 
     def _handle_click(self, position: tuple[int, int]) -> None:
-        """处理左键点击：先判按钮，再落到棋盘。
+        """处理左键点击：先判当前画面的按钮，再落到棋盘。
 
-        结算界面会盖住信息栏，因此结算状态下只响应卡片上的主按钮；
-        棋盘点击交给 :meth:`Session.click` 一律忽略。
+        开始界面只响应“开始游戏”按钮；结算界面会盖住信息栏，因此只响应
+        卡片上的主按钮；棋盘点击交给 :meth:`Session.click` 一律忽略。
         """
+        if self.scene is Scene.START:
+            if ui.start_button_rect().collidepoint(position):
+                self.start()
+            return
+
         if not self.session.is_playing:
             if ui.overlay_button_rect().collidepoint(position):
                 self._run_primary_action()
@@ -73,12 +104,20 @@ class Game:
         self.session.click(position)
 
     def _handle_key(self, key: int) -> None:
-        """处理按键：``Esc`` 退出，``R`` 重开本关，左右方向键开发期切关。"""
+        """处理按键：``Esc`` 退出，``Enter`` / 空格触发主按钮，``R`` 重开本关。
+
+        ``R`` 与左右方向键只在游戏画面生效；开始界面只认 ``Esc`` 与主按钮快捷键。
+        """
         if key == pygame.K_ESCAPE:
             self.running = False
-        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+            return
+        if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
             self._run_primary_action()
-        elif key == pygame.K_r:
+            return
+        if self.scene is Scene.START:
+            return
+
+        if key == pygame.K_r:
             self.session.restart_level()
         elif key == pygame.K_LEFT:
             self.session.load_level(self.session.level_index - 1)
@@ -86,17 +125,27 @@ class Game:
             self.session.load_level(self.session.level_index + 1)
 
     def _run_primary_action(self) -> None:
-        """执行结算界面主按钮的动作（按钮点击与 Enter / 空格共用入口）。
+        """执行当前画面的主按钮动作（按钮点击与 Enter / 空格共用入口）。
 
-        进行中按 Enter / 空格不作处理，避免误触丢掉进度。
+        开始界面是“开始游戏”，游戏画面里进行中不作处理（避免误触丢进度），
+        结算后则分别是“重试本关”“下一关”与“回到主界面”。
         """
-        if self.session.status is GameStatus.FAILED:
+        if self.scene is Scene.START:
+            self.start()
+        elif self.session.status is GameStatus.FAILED:
             self.session.restart_level()
         elif self.session.status is GameStatus.LEVEL_CLEARED:
-            self.session.advance()
+            if self.session.is_last_level:
+                self.return_to_start()
+            else:
+                self.session.advance()
 
     def _draw(self) -> None:
-        self.screen.fill(config.COLOR_BACKGROUND)
-        self.session.board.draw(self.screen)
-        ui.draw_ui(self.screen, self.session, pygame.mouse.get_pos())
+        if self.scene is Scene.START:
+            ui.draw_start_screen(self.screen, self.session, pygame.mouse.get_pos())
+        else:
+            # 柔光跟着棋盘走，让棋盘看起来是画面的视觉中心。
+            ui.draw_background(self.screen, self.session.board.rect.center)
+            self.session.board.draw(self.screen)
+            ui.draw_ui(self.screen, self.session, pygame.mouse.get_pos())
         pygame.display.flip()

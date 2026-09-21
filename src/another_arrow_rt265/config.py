@@ -17,7 +17,7 @@ FPS: Final[int] = 60
 
 # ------------------------------------------------------------------ 布局
 # 顶部信息栏（关卡 / 剩余箭头 / 失误 / 重新开始按钮）的高度。
-HUD_HEIGHT: Final[int] = 96
+HUD_HEIGHT: Final[int] = 104
 # 信息栏内所有元素相对窗口左右边界的留白。
 HUD_PADDING: Final[int] = 32
 # 棋盘相对窗口左右边界与底部边界的留白。
@@ -55,8 +55,15 @@ SELECTION_PULSE_SECONDS: Final[float] = 1.1
 SELECTION_PULSE_RATIO: Final[float] = 0.06
 
 # ------------------------------------------------------------------ 配色
-COLOR_BACKGROUND: Final[Color] = (17, 21, 31)
+# 窗口背景：自上而下的竖直渐变，外加棋盘 / 主按钮背后的一团柔光。
+COLOR_BACKGROUND_TOP: Final[Color] = (30, 38, 58)
+COLOR_BACKGROUND_BOTTOM: Final[Color] = (10, 13, 21)
+COLOR_BACKGROUND_GLOW: Final[Color] = (62, 98, 170)
+GLOW_ALPHA: Final[int] = 88
+
 COLOR_BOARD: Final[Color] = (28, 34, 48)
+# 棋盘底板的描边，避免深色棋盘在深色背景上“糊”成一片。
+COLOR_BOARD_BORDER: Final[Color] = (50, 61, 88)
 COLOR_CELL: Final[Color] = (40, 49, 68)
 COLOR_CHIP: Final[Color] = (26, 32, 45)
 COLOR_CHIP_SELECTED: Final[Color] = (52, 46, 30)
@@ -74,16 +81,32 @@ COLOR_BLOCKER_HINT: Final[Color] = (255, 122, 122)
 # 信息栏文字、按钮与失误圆点。
 COLOR_TEXT: Final[Color] = (233, 238, 248)
 COLOR_TEXT_MUTED: Final[Color] = (128, 141, 168)
-COLOR_BUTTON: Final[Color] = (46, 58, 82)
-COLOR_BUTTON_HOVER: Final[Color] = (64, 80, 110)
-COLOR_BUTTON_BORDER: Final[Color] = (88, 106, 142)
-COLOR_BUTTON_TEXT: Final[Color] = (233, 238, 248)
 COLOR_MISTAKE: Final[Color] = (238, 92, 92)
 COLOR_MISTAKE_SPENT: Final[Color] = (52, 60, 82)
+
+# 组件外观：投影、面板底色（渐变两端）与描边色，
+# 统计卡片、开始界面的“玩法”卡片以及各种按钮都由这几个色阶推出来。
+COLOR_SHADOW: Final[Color] = (3, 5, 9)
+COLOR_PANEL: Final[Color] = (36, 44, 63)
+COLOR_PANEL_DEEP: Final[Color] = (25, 31, 45)
+COLOR_PANEL_BORDER: Final[Color] = (62, 77, 108)
+
+# 次要按钮（深色）的渐变两端与悬停态。
+COLOR_BUTTON_TOP: Final[Color] = (54, 66, 92)
+COLOR_BUTTON_BOTTOM: Final[Color] = (38, 47, 67)
+COLOR_BUTTON_TOP_HOVER: Final[Color] = (70, 86, 118)
+COLOR_BUTTON_BOTTOM_HOVER: Final[Color] = (49, 61, 86)
+COLOR_BUTTON_BORDER: Final[Color] = (88, 106, 142)
+COLOR_BUTTON_TEXT: Final[Color] = (233, 238, 248)
+
+# 主按钮的强调色（金色），按钮上的文字用深色保证对比度。
+COLOR_PRIMARY: Final[Color] = (255, 196, 74)
+COLOR_ON_PRIMARY: Final[Color] = (38, 28, 8)
 
 # 结算覆盖层：遮罩、卡片，以及通关 / 失败两种强调色。
 COLOR_OVERLAY: Final[Color] = (8, 11, 18)
 OVERLAY_ALPHA: Final[int] = 200
-COLOR_CARD: Final[Color] = (30, 37, 52)
+COLOR_CARD_TOP: Final[Color] = (40, 49, 70)
+COLOR_CARD_BOTTOM: Final[Color] = (25, 31, 45)
 COLOR_SUCCESS: Final[Color] = (108, 220, 156)
 COLOR_FAILURE: Final[Color] = (238, 92, 92)
