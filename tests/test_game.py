@@ -1,4 +1,4 @@
-"""窗口级测试：事件分发、按钮点击与结算流转。
+"""窗口级测试：画面切换、事件分发、按钮点击与结算流转。
 
 这些测试在 SDL 的 dummy 驱动下创建真实窗口（见 ``conftest.py``），
 并通过 ``pygame.event.post()`` 投递鼠标与键盘事件，尽量贴近真实操作路径。
@@ -11,14 +11,16 @@ import pytest
 
 from another_arrow_rt265 import config, ui
 from another_arrow_rt265.board import Board, ClickResult
-from another_arrow_rt265.game import Game
+from another_arrow_rt265.game import Game, Scene
 from another_arrow_rt265.session import GameStatus, Session
 
 
 @pytest.fixture
 def game() -> Game:
-    """一个使用内置关卡、直接进入第 1 关的窗口。"""
-    return Game()
+    """一个使用内置关卡、已经离开开始界面的窗口（停在第 1 关）。"""
+    instance = Game()
+    instance.start()
+    return instance
 
 
 def _post_click(game: Game, position: tuple[int, int]) -> None:
@@ -158,7 +160,74 @@ def test_arrow_keys_switch_levels_for_development(game: Game) -> None:
     assert session.level_number == 1
 
 
+# ---------------------------------------------------------------- 开始界面
+
+
+def test_window_opens_on_the_start_screen() -> None:
+    game = Game()
+    assert game.scene is Scene.START
+    assert game.session.level_number == 1
+    assert game.session.status is GameStatus.PLAYING
+
+
+def test_clicking_the_start_button_begins_the_game() -> None:
+    game = Game()
+    _post_click(game, ui.start_button_rect().center)
+    assert game.scene is Scene.PLAYING
+
+
+def test_enter_starts_the_game_from_the_start_screen() -> None:
+    game = Game()
+    _post_key(game, pygame.K_RETURN)
+    assert game.scene is Scene.PLAYING
+
+
+def test_start_screen_ignores_board_and_hud_clicks() -> None:
+    game = Game()
+    session = game.session
+    initial = session.arrows_left
+
+    _post_click(game, session.board.cell_rect(0, 1).center)
+    _post_click(game, ui.restart_button_rect().center)
+
+    assert game.scene is Scene.START
+    assert session.arrows_left == initial
+    assert session.mistakes_left == session.max_mistakes
+
+
+def test_start_screen_ignores_in_game_shortcuts() -> None:
+    game = Game()
+    _post_key(game, pygame.K_r)
+    _post_key(game, pygame.K_RIGHT)
+
+    assert game.scene is Scene.START
+    assert game.session.level_number == 1
+
+
+def test_clearing_the_last_level_returns_to_the_start_screen() -> None:
+    game = Game()
+    game.start()
+    session = game.session
+    session.load_level(session.total_levels - 1)
+
+    _clear_board(session.board)
+    _settle(session)
+    assert session.status is GameStatus.LEVEL_CLEARED
+    assert ui.overlay_button_text(session) == "回到主界面"
+
+    _post_click(game, ui.overlay_button_rect().center)
+    assert game.scene is Scene.START
+    assert session.level_number == 1
+    assert session.mistakes_left == session.max_mistakes
+
+
 def test_draw_renders_a_full_frame(game: Game) -> None:
     game._draw()
     game.session.status = GameStatus.LEVEL_CLEARED
     game._draw()
+
+
+def test_draw_renders_the_start_screen_frame() -> None:
+    game = Game()
+    game._draw()
+    assert game.scene is Scene.START
