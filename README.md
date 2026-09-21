@@ -17,6 +17,10 @@
 
 ## Installation
 
+下载 [Releases](https://github.com/rt265/another-arrow-rt265/releases) 中的 `another-arrow-<version tag>.zip`，解压并运行 `another-arrow-rt265.exe`
+
+当前仅提供 Windows x86_64 构建。
+
 ## Wiki
 
 ## Development
@@ -56,6 +60,29 @@ Type Check:
 ```bash
 ty check
 ```
+
+## Build
+
+使用 [Nuitka](https://nuitka.net/) 打包为独立可执行目录，目标机器无需安装 Python：
+
+```bash
+uv run python -m nuitka --project
+```
+
+`--project` 会读取 `pyproject.toml`，自动识别包名、`[project.scripts]` 里的入口函数，
+以及 `[tool.nuitka]` 中的打包选项，因此无需在命令行重复写包名与入口。
+
+产物位置：
+
+```text
+build/nuitka/another-arrow-rt265.dist/
+├─ another-arrow-rt265.exe   # 双击即可运行
+├─ python313.dll             # 内嵌的 Python 运行时
+└─ pygame/                   # pygame 扩展模块与 SDL2 等 DLL
+```
+
+首次打包需要 C 编译器，之后再打包会复用编译缓存。
+调试打包结果时可以用 `SDL_VIDEODRIVER=dummy` 在无显示器环境下跑冒烟测试。
 
 ## Credits & License
 
