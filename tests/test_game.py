@@ -303,6 +303,78 @@ def test_every_declared_menu_action_is_wired() -> None:
         game._run_action("unknown-action")
 
 
+# ---------------------------------------------------------------- 第一关教程
+
+
+def test_first_level_opens_with_the_interactive_tutorial(game: Game) -> None:
+    """首屏不再用文字讲规则：第 1 关自带一段可交互的教程。"""
+    progress = game.session.tutorial
+    assert progress is not None
+    assert progress.hint is not None
+    assert progress.suggested_arrow(game.session.board) is not None
+
+
+def test_later_levels_have_no_tutorial(game: Game) -> None:
+    game.session.load_level(1)
+    assert game.session.tutorial is None
+
+
+def test_tutorial_panel_swallows_clicks_that_miss_the_skip_button(game: Game) -> None:
+    """提示条上的空白处吃掉点击，不会漏到下面的棋盘上。"""
+    session = game.session
+    initial = session.arrows_left
+    panel = ui.tutorial_panel_rect()
+
+    _post_click(game, (panel.left + 12, panel.centery))
+
+    assert session.arrows_left == initial
+    assert session.mistakes_left == session.max_mistakes
+    assert session.tutorial is not None
+
+
+def test_skip_button_hands_the_board_back_to_the_player(game: Game) -> None:
+    session = game.session
+    initial = session.arrows_left
+
+    _post_click(game, ui.tutorial_skip_button_rect().center)
+    assert session.tutorial is None
+
+    # 跳过之后棋盘照常响应，提示条不再拦点击。
+    _post_click(game, session.board.cell_rect(0, 1).center)
+    assert session.arrows_left == initial - 1
+
+
+def test_clearing_the_first_level_ends_the_tutorial(game: Game) -> None:
+    session = game.session
+    _clear_board(session.board)
+    _settle(session)
+
+    assert session.status is GameStatus.LEVEL_CLEARED
+    assert session.tutorial is None
+
+
+def test_draw_renders_the_first_level_frame_with_the_tutorial(game: Game) -> None:
+    assert game.session.tutorial is not None
+    game._draw()
+
+
+def test_tutorial_is_only_taught_once_per_session() -> None:
+    """同一次会话里教过就不再重播，但新开一局（新窗口）会重新教。"""
+    game = Game()
+    game.start()
+    game.session.skip_tutorial()
+
+    _post_click(game, ui.hud_home_button_rect().center)
+    assert game.scene is Scene.START
+
+    game.start()
+    assert game.session.tutorial is None, "同一次会话里教过就不再重播"
+
+    fresh = Game()
+    fresh.start()
+    assert fresh.session.tutorial is not None, "新开一局应当重新走一遍教程"
+
+
 # ---------------------------------------------------------------- 回到主界面
 
 

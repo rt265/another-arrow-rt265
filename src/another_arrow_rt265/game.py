@@ -7,7 +7,9 @@
 - **关于界面**（:class:`Scene.ABOUT`）：玩法、操作与制作信息，页脚按钮回主界面；
 - **游戏画面**（:class:`Scene.PLAYING`）：顶部信息栏（回到主界面 / 关卡 /
   剩余箭头 / 用时 / 失误 / 重新开始）+ 棋盘，通关或失败时在棋盘之上叠一张
-  结算卡片。
+  结算卡片；第 1 关还会在棋盘上方挂一条可交互的教程提示
+  （进度见 :mod:`another_arrow_rt265.tutorial`），玩家跟着高亮箭头点几下
+  就能学会全部规则，不必先在首屏读一段文字说明。
 
 点击棋盘上的箭头，畅通则飞出、被阻挡则扣一次失误（见 ``board`` / ``session``）；
 失误耗尽弹出失败卡片，可重试本关；清空全部箭头弹出通关卡片，可进入下一关。
@@ -81,7 +83,7 @@ class Game:
             self.session.update(dt)
 
     def start(self) -> None:
-        """离开开始界面，从第 1 关开始新的一局。"""
+        """离开开始界面，从第 1 关开始新的一局（第 1 关带交互式教程）。"""
         self.session.load_level(0)
         self.scene = Scene.PLAYING
 
@@ -120,7 +122,8 @@ class Game:
 
         菜单页上的按钮来自 :class:`~another_arrow_rt265.ui.MenuPage` 的描述，
         因此新增界面时这里不必再改；游戏画面左上角与结算卡片左下角都有
-        “回到主界面”；结算界面其余区域不响应棋盘点击。
+        “回到主界面”；结算界面其余区域不响应棋盘点击；第 1 关的教程提示条
+        只让“跳过教程”生效，条上的其他位置吃掉点击，免得漏到棋盘上。
         """
         if self.scene is not Scene.PLAYING:
             self._handle_menu_click(position)
@@ -137,6 +140,12 @@ class Game:
             self.return_to_start()
         elif ui.restart_button_rect().collidepoint(position):
             self.session.restart_level()
+        elif (
+            self.session.tutorial is not None
+            and ui.tutorial_panel_rect().collidepoint(position)
+        ):
+            if ui.tutorial_skip_button_rect().collidepoint(position):
+                self.session.skip_tutorial()
         else:
             self.session.click(position)
 

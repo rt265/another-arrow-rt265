@@ -41,6 +41,18 @@ MAX_MISTAKES: Final[int] = 3
 # 棋盘清空后、弹出通关结算前的停顿（秒），用于等最后一支箭头飞完。
 LEVEL_CLEARED_DELAY: Final[float] = 0.18
 
+# ------------------------------------------------------------------ 教程
+# 教程只在这一关（序号从 0 开始）上启用：它同时包含“前方畅通”与“被挡住”的箭头，
+# 可以就地演示两条核心规则，因此不必在首屏先读一遍文字说明。
+TUTORIAL_LEVEL_INDEX: Final[int] = 0
+# 教程提示条的高度：排在棋盘上方的空白带里，不遮挡任何棋子。
+TUTORIAL_BAR_HEIGHT: Final[int] = 44
+# 提示条右侧“跳过教程”按钮的尺寸。
+TUTORIAL_SKIP_SIZE: Final[tuple[int, int]] = (104, 30)
+# 待点击箭头外围高亮环的呼吸周期（秒）与向外扩张的基准幅度（像素）。
+TUTORIAL_PULSE_SECONDS: Final[float] = 1.2
+TUTORIAL_RING_GROW: Final[int] = 5
+
 # ------------------------------------------------------------------ 反馈
 # 撞到其他箭头时的闪烁提示持续时间（秒）。
 BLOCKED_FLASH_SECONDS: Final[float] = 0.45

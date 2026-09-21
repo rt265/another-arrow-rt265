@@ -131,23 +131,34 @@ def test_timer_chip_has_room_for_a_long_time_reading() -> None:
     assert widest.get_width() + 2 * ui._HUD_CHIP_PADDING <= elapsed.width
 
 
-def test_start_button_is_centered_and_above_the_rules_panel() -> None:
+def test_start_button_is_centered_above_the_footer_button() -> None:
     button = ui.start_button_rect()
-    panel = ui.rules_panel_rect()
+    footer = ui.about_button_rect()
 
     assert button.centerx == config.WINDOW_WIDTH // 2
     assert 0 <= button.left and button.right <= config.WINDOW_WIDTH
-    # 主按钮位于画面中上部，且不压到下方的“玩法”卡片。
+    # 主按钮位于画面中上部，且不压到页脚的“关于”。
     assert button.centery < config.WINDOW_HEIGHT * 0.6
-    assert button.bottom < panel.top
+    assert button.bottom < footer.top
 
 
-def test_start_screen_content_fits_inside_the_window() -> None:
-    panel = ui.rules_panel_rect()
+def test_start_screen_keeps_no_rule_text() -> None:
+    """首屏不再用文字讲规则：说明卡片与提示行都让给第 1 关的交互式教程。"""
+    page = ui.start_page(3, 3)
+    layout = ui.menu_layout(page)
 
-    assert panel.left >= 0
-    assert panel.right <= config.WINDOW_WIDTH
-    assert panel.bottom <= config.WINDOW_HEIGHT
+    assert page.sections == ()
+    assert page.hint is None
+    assert layout.sections == ()
+    assert layout.hint is None
+
+
+def test_about_screen_still_explains_the_rules() -> None:
+    """文字说明没有消失，只是搬到了“关于”界面，想复习的玩家找得到。"""
+    lines = [line for section in ui.about_page(3, 3).sections for line in section.lines]
+
+    assert any("飞出棋盘" in line for line in lines)
+    assert any("失误" in line for line in lines)
 
 
 # ---------------------------------------------------------------- 菜单页
@@ -215,17 +226,13 @@ def test_menu_page_text_fits_inside_its_section() -> None:
 
 
 def test_menu_pages_report_content_from_the_session() -> None:
-    """菜单页上的关卡数与失误上限跟会话走，不写死。"""
+    """“关于”界面上的关卡数与失误上限跟会话走，不写死。"""
     lines = [
         line for section in ui.about_page(12, 5).sections for line in section.lines
     ]
 
     assert any(f"版本 {config.VERSION}" in line for line in lines)
     assert any("共 12 关" in line and "5 次" in line for line in lines)
-
-    hint = ui.start_page(12, 5).hint
-    assert hint is not None, "开始界面应当用提示行报出关卡数"
-    assert "共 12 关" in hint
 
 
 def test_menu_pages_pick_a_default_action_for_enter() -> None:

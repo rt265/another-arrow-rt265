@@ -11,6 +11,8 @@
   + 提示行 + 页脚按钮。开始界面与关于界面都是菜单页，只是内容不同；
 - 进行中：左上角“回到主界面”、关卡 / 剩余箭头 / 用时 / 失误四块统计卡片，
   右侧“重新开始”按钮；
+- 教程（只在第 1 关）：棋盘上方的引导提示条 + 待点击箭头的呼吸高亮，
+  叠加在“进行中”画面上（见 :func:`draw_tutorial`）；
 - 通关 / 失败：叠加遮罩与卡片（正文下方额外报一下本关用时），
   底部并排“回到主界面”与主按钮（下一关 / 重试本关 / 再来一轮）。
 
@@ -35,7 +37,7 @@ from typing import Final
 
 import pygame
 
-from another_arrow_rt265 import config, icons
+from another_arrow_rt265 import config, icons, tutorial
 from another_arrow_rt265.direction import Direction
 from another_arrow_rt265.session import GameStatus, Session
 
@@ -145,11 +147,19 @@ _SECTION_FIRST_LINE_TOP: Final[int] = 66
 _SECTION_LINE_HEIGHT: Final[int] = 30
 _SECTION_TEXT_HEIGHT: Final[int] = 24
 _SECTION_BOTTOM_PADDING: Final[int] = 8
-_RULES: Final[tuple[str, ...]] = (
-    "点击箭头，前方没有阻挡时它会飞出棋盘",
-    "被挡住的箭头飞不出去，还会消耗一次失误",
-    "清空棋盘上的全部箭头，即可进入下一关",
-)
+
+# 教程提示条（只出现在第 1 关）：左侧是“第几步 / 共几步”，中间一句话指引，
+# 右侧是“跳过教程”；同时给待点击的箭头套一圈呼吸高亮，把“点哪里”直接画出来。
+_TUTORIAL_BAR_RADIUS: Final[int] = 22
+_TUTORIAL_BAR_PADDING: Final[int] = 14
+_TUTORIAL_DIVIDER_GAP: Final[int] = 12
+_TUTORIAL_SKIP_MARGIN: Final[int] = 10
+_TUTORIAL_RING_WIDTH: Final[int] = 3
+# 高亮环呼吸时的透明度区间（最淡 / 最亮）与阻挡提示环的透明度。
+_TUTORIAL_RING_ALPHA: Final[tuple[int, int]] = (110, 200)
+_TUTORIAL_BLOCKER_ALPHA: Final[int] = 150
+_TUTORIAL_BLOCKER_GROW: Final[int] = 4
+_TUTORIAL_BLOCKER_WIDTH: Final[int] = 2
 
 # 组件投影 / 光晕的默认扩散半径。
 _SHADOW_SPREAD: Final[int] = 8
@@ -234,21 +244,21 @@ class MenuLayout:
     buttons: tuple[tuple[MenuButton, pygame.Rect], ...]
 
 
-_RULES_SECTION: Final[MenuSection] = MenuSection("玩法", _RULES)
-
-
 @functools.cache
 def start_page(total_levels: int, max_mistakes: int) -> MenuPage:
     """返回开始界面的页面描述。
 
+    开始界面刻意不放任何文字说明：规则改由第 1 关的交互式教程边玩边教
+    （见 :func:`draw_tutorial`），屏幕只留标题、方向箭头装饰与两个按钮。
+
     Args:
-        total_levels: 关卡总数，用于页脚的提示行。
+        total_levels: 关卡总数。开始界面不再展示这个数字（“关于”界面上有），
+            入参先与 :func:`about_page` 保持同形，以后要加提示行时直接可用。
         max_mistakes: 每关的失误次数上限，同上。
     """
     return MenuPage(
         title=_GAME_TITLE,
         subtitle=_GAME_SUBTITLE,
-        sections=(_RULES_SECTION,),
         buttons=(
             MenuButton(
                 "start",
@@ -260,7 +270,6 @@ def start_page(total_levels: int, max_mistakes: int) -> MenuPage:
             MenuButton("about", "关于", icons.Icon.INFO),
         ),
         decorations=True,
-        hint=f"共 {total_levels} 关 · 每关最多 {max_mistakes} 次失误",
     )
 
 
@@ -609,11 +618,6 @@ def start_button_rect() -> pygame.Rect:
     return _hero_row_rects(1)[0]
 
 
-def rules_panel_rect() -> pygame.Rect:
-    """返回开始界面“玩法”卡片的区域。"""
-    return _stack_sections((_RULES_SECTION,), _PAGE_SECTIONS_TOP)[0]
-
-
 def about_button_rect() -> pygame.Rect:
     """返回开始界面页脚“关于”按钮的区域。"""
     return _footer_row_rects(1)[0]
@@ -710,6 +714,30 @@ def overlay_card_rect() -> pygame.Rect:
     return card
 
 
+def tutorial_panel_rect() -> pygame.Rect:
+    """返回教程提示条的区域（第 1 关棋盘上方的空白带）。
+
+    第 1 关是 4x4 的小棋盘，格子尺寸被 ``config.MAX_CELL_SIZE`` 顶住，于是
+    棋盘的上下各留出一段空白；提示条放在上侧那条里，既不遮挡棋子，也不必把
+    棋盘缩小（第 1 关的棋盘位置因此和正式关卡完全一致）。
+    ``tests/test_tutorial.py`` 会把“提示条不压到第 1 关棋盘”钉住。
+    """
+    area = board_area()
+    return pygame.Rect(area.left, area.top, area.width, config.TUTORIAL_BAR_HEIGHT)
+
+
+def tutorial_skip_button_rect() -> pygame.Rect:
+    """返回教程提示条右侧“跳过教程”按钮的区域。"""
+    panel = tutorial_panel_rect()
+    width, height = config.TUTORIAL_SKIP_SIZE
+    return pygame.Rect(
+        panel.right - _TUTORIAL_SKIP_MARGIN - width,
+        panel.centery - height // 2,
+        width,
+        height,
+    )
+
+
 def overlay_home_button_rect() -> pygame.Rect:
     """返回结算界面“回到主界面”按钮的区域（在按钮行左侧）。"""
     return _overlay_button_row()[0]
@@ -786,7 +814,7 @@ def draw_ui(
     session: Session,
     mouse: tuple[int, int] | None = None,
 ) -> None:
-    """按会话状态绘制游戏画面（信息栏，结算时再加一层卡片）。
+    """按会话状态绘制游戏画面（信息栏、教程提示，结算时再加一层卡片）。
 
     Args:
         surface: 绘制目标。
@@ -794,6 +822,7 @@ def draw_ui(
         mouse: 鼠标位置，仅用于按钮的悬停高亮；为 ``None`` 时不显示悬停效果。
     """
     draw_hud(surface, session, mouse)
+    draw_tutorial(surface, session, mouse)
     if session.status is not GameStatus.PLAYING:
         draw_overlay(surface, session, mouse)
 
@@ -835,6 +864,143 @@ def draw_hud(
     _draw_secondary_button(
         surface, restart_button_rect(), "重新开始", mouse, icon=icons.Icon.RESTART
     )
+
+
+def draw_tutorial(
+    surface: pygame.Surface,
+    session: Session,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """绘制第 1 关的交互式教程：待点击箭头的高亮 + 顶部提示条。
+
+    只有 :attr:`Session.tutorial` 有进度、且本关仍在进行中时才画：结算卡片弹出后
+    提示条自动让位（已经在结算了，不必再教怎么点）。
+
+    Args:
+        surface: 绘制目标。
+        session: 当前会话，教程进度与棋盘都从它读取。
+        mouse: 鼠标位置，仅用于“跳过教程”按钮的悬停高亮。
+    """
+    progress = session.tutorial
+    if progress is None or not session.is_playing:
+        return
+    hint = progress.hint
+    if hint is None:
+        return
+
+    _draw_tutorial_highlight(surface, session, hint)
+
+    panel = tutorial_panel_rect()
+    _draw_panel(
+        surface,
+        panel,
+        config.COLOR_CARD_TOP,
+        config.COLOR_CARD_BOTTOM,
+        radius=_TUTORIAL_BAR_RADIUS,
+        border=config.COLOR_PRIMARY,
+        shadow_spread=6,
+    )
+
+    # 左侧进度读数 → 竖分隔线 → 指引文案 → 右侧“跳过教程”，一行排开。
+    progress_label = _font(_FONT_LABEL).render(
+        hint.progress, True, config.COLOR_PRIMARY
+    )
+    surface.blit(
+        progress_label,
+        progress_label.get_rect(
+            midleft=(panel.left + _TUTORIAL_BAR_PADDING, panel.centery)
+        ),
+    )
+    divider_x = (
+        panel.left
+        + _TUTORIAL_BAR_PADDING
+        + progress_label.get_width()
+        + _TUTORIAL_DIVIDER_GAP
+    )
+    pygame.draw.line(
+        surface,
+        config.COLOR_PANEL_BORDER,
+        (divider_x, panel.top + 10),
+        (divider_x, panel.bottom - 10),
+    )
+    text = _font(_FONT_RULE).render(hint.text, True, config.COLOR_TEXT)
+    surface.blit(
+        text,
+        text.get_rect(midleft=(divider_x + _TUTORIAL_DIVIDER_GAP, panel.centery)),
+    )
+    _draw_compact_button(surface, tutorial_skip_button_rect(), "跳过教程", mouse)
+
+
+def _draw_tutorial_highlight(
+    surface: pygame.Surface,
+    session: Session,
+    hint: tutorial.TutorialHint,
+) -> None:
+    """给教程当前指向的箭头套一圈呼吸高亮，“点哪里”直接画在棋盘上。
+
+    “点击被挡住的箭头”这一步会额外把挡路的箭头圈出来（细一档的红环），
+    于是“谁挡住了谁”也从文字变成了看得见的图形。
+    """
+    progress = session.tutorial
+    if progress is None:
+        return
+    board = session.board
+    arrow = progress.suggested_arrow(board)
+    if arrow is None:
+        return
+
+    pulse = 0.5 + 0.5 * math.sin(_tutorial_phase() * math.tau)
+    grow = round(config.TUTORIAL_RING_GROW + 2 * pulse)
+    faint, bright = _TUTORIAL_RING_ALPHA
+    alpha = round(faint + (bright - faint) * pulse)
+    _draw_cell_ring(
+        surface,
+        board.cell_rect(arrow.row, arrow.col),
+        grow,
+        (*config.COLOR_PRIMARY, alpha),
+        width=_TUTORIAL_RING_WIDTH,
+    )
+
+    if hint.step is tutorial.TutorialStep.BLOCKED:
+        blocker = board.blocking_arrow(arrow)
+        if blocker is not None:
+            _draw_cell_ring(
+                surface,
+                board.cell_rect(blocker.row, blocker.col),
+                _TUTORIAL_BLOCKER_GROW,
+                (*config.COLOR_BLOCKER_HINT, _TUTORIAL_BLOCKER_ALPHA),
+                width=_TUTORIAL_BLOCKER_WIDTH,
+            )
+
+
+def _tutorial_phase() -> float:
+    """返回当前时刻在呼吸周期里的相位（0.0 ~ 1.0），只用于视觉提示。
+
+    高亮环是纯装饰，不参与任何判定，因此直接读时钟，不必让棋盘再维护一份计时。
+    """
+    period = max(config.TUTORIAL_PULSE_SECONDS, 1e-6)
+    return pygame.time.get_ticks() / 1000.0 % period / period
+
+
+def _draw_cell_ring(
+    surface: pygame.Surface,
+    cell: pygame.Rect,
+    grow: int,
+    color: tuple[int, int, int, int],
+    *,
+    width: int,
+) -> None:
+    """在格子外围画一圈半透明描边（``color`` 的第 4 个分量是透明度）。"""
+    rect = cell.inflate(2 * grow, 2 * grow)
+    layer = pygame.Surface(rect.size, pygame.SRCALPHA)
+    pygame.draw.rect(
+        layer,
+        color,
+        layer.get_rect(),
+        width=width,
+        border_radius=config.CELL_RADIUS + grow,
+    )
+    surface.blit(layer, rect.topleft)
 
 
 def draw_overlay(
@@ -1262,15 +1428,44 @@ def _draw_primary_button(
     _draw_button_content(surface, rect, text, config.COLOR_ON_PRIMARY, icon)
 
 
+def _draw_compact_button(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    text: str,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """画一个小尺寸的次要按钮（教程提示条上的“跳过教程”）。
+
+    它是贴在提示条上的附属操作，因此不投影（投影会脏了提示条自身的孄光），
+    字号也降一档，不抢主按钮的戏。
+    """
+    hovered = mouse is not None and rect.collidepoint(mouse)
+    top = config.COLOR_BUTTON_TOP_HOVER if hovered else config.COLOR_BUTTON_TOP
+    bottom = config.COLOR_BUTTON_BOTTOM_HOVER if hovered else config.COLOR_BUTTON_BOTTOM
+    _draw_panel(
+        surface,
+        rect,
+        top,
+        bottom,
+        radius=rect.height // 2,
+        border=config.COLOR_BUTTON_BORDER,
+        shadow=False,
+    )
+    _draw_button_content(
+        surface, rect, text, config.COLOR_BUTTON_TEXT, font_size=_FONT_LABEL
+    )
+
+
 def _draw_button_content(
     surface: pygame.Surface,
     rect: pygame.Rect,
     text: str,
     color: config.Color,
     icon: icons.Icon | None = None,
+    font_size: int = _FONT_BUTTON,
 ) -> None:
     """把“图标 + 文字”当成一个整体在按钮里居中。"""
-    label = _font(_FONT_BUTTON).render(text, True, color)
+    label = _font(font_size).render(text, True, color)
     content_width = label.get_width()
     if icon is not None:
         content_width += _BUTTON_ICON_SIZE + _BUTTON_ICON_GAP

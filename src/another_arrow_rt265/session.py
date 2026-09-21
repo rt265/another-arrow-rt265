@@ -4,12 +4,14 @@
 与 :mod:`another_arrow_rt265.config`，不涉及任何绘制，因此可以在没有窗口的
 环境下用固定 ``dt`` 完整地测试通关、失败与重新开始。
 
-一次会话包含四件事：
+一次会话包含五件事：
 
 - **棋盘**：交给 ``Board`` 处理点击、碰撞与动画；
-- **失误次数**：点击被阻挡的箭头时扣减，扣到 0 即本关失败；
+- **失误次数**：点击被阻挡的箭头时扣减，扣到 0 即本关失败（教程里那次演示撞墙除外）；
 - **关卡进度**：棋盘清空（且飞出动画播完）后进入通关结算，再进入下一关；
-- **单关计时**：每关各有一个计时器，只在“还在解谜”时走字，并记住本关的最佳用时。
+- **单关计时**：每关各有一个计时器，只在“还在解谜”时走字，并记住本关的最佳用时；
+- **新手教程**：第 1 关附带一段边玩边学的教程（见 :mod:`another_arrow_rt265.tutorial`），
+  进度由本模块在点击与每帧刷新时推进，画什么则交给 ``ui``。
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import pygame
 from another_arrow_rt265 import config
 from another_arrow_rt265.board import Board, ClickResult
 from another_arrow_rt265.levels import LEVELS, Level
+from another_arrow_rt265.tutorial import Tutorial
 
 
 class GameStatus(Enum):
@@ -71,6 +74,8 @@ class Session:
         self._cleared_pause = 0.0
         # 最佳用时按“关卡序号”记录，不随重开本关或回到主界面清空。
         self._best_times: dict[int, float] = {}
+        # 教程在本局会话里只教一次：走完或被跳过后，重开本关也不会再弹。
+        self._tutorial_seen = False
         self._load(level_index % len(levels))
 
     # ------------------------------------------------------------ 只读状态
@@ -138,6 +143,11 @@ class Session:
         """刚刚这次通关是否刷新了本关的最佳用时（第一次通关也算刷新）。"""
         return self._new_record
 
+    @property
+    def tutorial(self) -> Tutorial | None:
+        """当前关卡的教程进度；非教程关卡、或本局已经教过（走完 / 跳过）时为 ``None``。"""
+        return self._tutorial
+
     # ------------------------------------------------------------ 规则
 
     def click(self, position: tuple[int, int]) -> ClickResult | None:
@@ -156,15 +166,28 @@ class Session:
             return None
 
         result = self._board.handle_click(position)
-        if result is ClickResult.BLOCKED:
+        if result is ClickResult.BLOCKED and not self._is_collision_demo():
             self._mistakes_left -= 1
             if self._mistakes_left <= 0:
                 self.status = GameStatus.FAILED
+        if self._tutorial is not None:
+            self._tutorial.note_click(result)
+            self._sync_tutorial()
         return result
+
+    def _is_collision_demo(self) -> bool:
+        """这次撞墙是不是教程正在演示的那一次（演示只讲道理，不扣失误）。
+
+        必须在 ``note_click()`` **之前**问：演示那一次点击会同时把碰撞那一步记完，
+        问晚了就变成“真扣”。演示本身依然会触发棋盘的晃动 / 火花 / 挡路提示，
+        玩家看得到碰撞，也不会因为还在学而丢一条命。
+        """
+        return self._tutorial is not None and self._tutorial.collision_demo_pending
 
     def update(self, dt: float) -> None:
         """推进棋盘动画、本关计时与结算计时，``dt`` 为上一帧耗时（秒）。"""
         self._board.update(dt)
+        self._sync_tutorial()
         if not self.is_playing:
             return
 
@@ -213,11 +236,21 @@ class Session:
         """跳到指定关卡（越界时取模）并重置失误次数。"""
         self._load(level_index % len(self.levels))
 
+    def skip_tutorial(self) -> None:
+        """跳过教程：本局会话内不再显示（重开本关、回到第 1 关都不会再弹）。"""
+        self._dismiss_tutorial()
+
+    def _dismiss_tutorial(self) -> None:
+        """收起教程，并记下“本局已经教过”（之后重开本关也不会再弹）。"""
+        self._tutorial_seen = True
+        self._tutorial = None
+
     def _load(self, level_index: int) -> None:
-        """载入关卡并重置与本关绑定的所有状态（包括计时器）。
+        """载入关卡并重置与本关绑定的所有状态（包括计时器与教程）。
 
         “重置”指重新数一次本次挑战的用时；:attr:`best_time` 属于关卡的历史成绩，
-        因此不会被清掉。
+        因此不会被清掉。教程只在第 1 关且本局还没教过时出现，失败重开会重新教
+        （失败说明还没学会），走完或被跳过之后再回到第 1 关就不再打扰。
         """
         self.level_index = level_index
         self._board = Board(self.levels[level_index], self.area)
@@ -226,3 +259,27 @@ class Session:
         self._cleared_pause = 0.0
         self._elapsed = 0.0
         self._new_record = False
+        show_tutorial = not self._tutorial_seen and self._needs_tutorial(level_index)
+        self._tutorial = Tutorial() if show_tutorial else None
+
+    def _needs_tutorial(self, level_index: int) -> bool:
+        """``level_index`` 是不是“教程关”。
+
+        只有**内置关卡列表**的第 1 关带教程：教程是给首次上手的玩家准备的引导，
+        而“演示撞墙不扣失误”是对规则的一处放宽——自定义关卡（测试、以后的自制
+        关卡）即使也排在序号 0，也不应该被悄悄塞进教程、更不该继承这处放宽。
+        """
+        return level_index == config.TUTORIAL_LEVEL_INDEX and self.levels == LEVELS
+
+    def _sync_tutorial(self) -> None:
+        """按棋盘状态推进教程；教学完成或本关目标已达成时收起教程。
+
+        收起（并记为“本局教过了”）的条件有两个：三步都走完，或棋盘已经清空——
+        后者是为了兜住“玩家一路只点畅通箭头、从没撞过墙”的情况，此时本关已经通关，
+        没必要继续教下去。本关失败不收起教程，重开本关会从第一步重新教一遍。
+        """
+        if self._tutorial is None:
+            return
+        self._tutorial.sync(self._board)
+        if self._tutorial.is_finished or self._board.is_cleared:
+            self._dismiss_tutorial()
