@@ -35,6 +35,9 @@ class Icon(Enum):
     NEXT = "next"
     """右箭头：开始游戏 / 进入下一关。"""
 
+    INFO = "info"
+    """信息：打开“关于”界面。"""
+
 
 def draw_icon(
     surface: pygame.Surface,
@@ -56,8 +59,10 @@ def draw_icon(
         _draw_home(surface, center, size, color)
     elif icon is Icon.RESTART:
         _draw_restart(surface, center, size, color)
-    else:
+    elif icon is Icon.NEXT:
         _draw_next(surface, center, size, color)
+    else:
+        _draw_info(surface, center, size, color)
 
 
 def _stroke_width(size: int) -> int:
@@ -155,6 +160,33 @@ def _draw_restart(
                 points[-1][1] - tangent_x * half_base,
             ),
         ),
+    )
+
+
+def _draw_info(
+    surface: pygame.Surface, center: tuple[int, int], size: int, color: config.Color
+) -> None:
+    """信息：一个圆圈，圈内是“i”的点与竖杆。
+
+    圆环半径略小于外接框的一半（再加上描边的一半），因此描边不会出框。
+    """
+    center_x, center_y = center
+    half = size / 2.0
+    stroke = _stroke_width(size)
+
+    pygame.draw.circle(surface, color, center, round(half * 0.92), width=stroke)
+
+    # 点与竖杆都落在圆的竖直中轴上，合起来读作字母 i。
+    dot_radius = max(1, round(size * 0.07))
+    pygame.draw.circle(
+        surface, color, (center_x, round(center_y - half * 0.32)), dot_radius
+    )
+    pygame.draw.line(
+        surface,
+        color,
+        (center_x, center_y - half * 0.06),
+        (center_x, center_y + half * 0.46),
+        width=stroke,
     )
 
 

@@ -238,6 +238,71 @@ def test_last_level_primary_button_starts_a_new_round() -> None:
     assert session.mistakes_left == session.max_mistakes
 
 
+# ---------------------------------------------------------------- 关于界面
+
+
+def test_start_screen_footer_opens_the_about_screen() -> None:
+    game = Game()
+    _post_click(game, ui.about_button_rect().center)
+    assert game.scene is Scene.ABOUT
+
+
+def test_about_screen_back_button_returns_to_the_start_screen() -> None:
+    game = Game()
+    _post_click(game, ui.about_button_rect().center)
+    _post_click(game, ui.about_back_button_rect().center)
+    assert game.scene is Scene.START
+
+
+def test_enter_returns_from_the_about_screen() -> None:
+    game = Game()
+    _post_click(game, ui.about_button_rect().center)
+    _post_key(game, pygame.K_RETURN)
+    assert game.scene is Scene.START
+
+
+def test_h_key_returns_from_the_about_screen() -> None:
+    game = Game()
+    _post_click(game, ui.about_button_rect().center)
+    _post_key(game, pygame.K_h)
+    assert game.scene is Scene.START
+
+
+def test_about_screen_ignores_board_and_in_game_shortcuts() -> None:
+    game = Game()
+    session = game.session
+    initial = session.arrows_left
+
+    _post_click(game, ui.about_button_rect().center)
+    _post_click(game, session.board.cell_rect(0, 1).center)
+    _post_key(game, pygame.K_r)
+    _post_key(game, pygame.K_RIGHT)
+
+    assert game.scene is Scene.ABOUT
+    assert session.level_number == 1
+    assert session.arrows_left == initial
+    assert session.mistakes_left == session.max_mistakes
+
+
+def test_draw_renders_the_about_screen_frame() -> None:
+    game = Game()
+    _post_click(game, ui.about_button_rect().center)
+    game._draw()
+    assert game.scene is Scene.ABOUT
+
+
+def test_every_declared_menu_action_is_wired() -> None:
+    """菜单页声明的动作都要登记在动作表里：加了按钮却忘了接线会在这里报错。"""
+    game = Game()
+
+    for page in (ui.start_page(3, 3), ui.about_page(3, 3)):
+        for button in page.buttons:
+            game._run_action(button.action)
+
+    with pytest.raises(KeyError):
+        game._run_action("unknown-action")
+
+
 # ---------------------------------------------------------------- 回到主界面
 
 

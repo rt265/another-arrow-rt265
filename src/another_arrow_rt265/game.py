@@ -1,14 +1,23 @@
 """游戏主循环。
 
-窗口由两个画面组成，切换逻辑集中在 :class:`Game` 里：
+窗口由三个画面组成，切换逻辑集中在 :class:`Game` 里：
 
-- **开始界面**（:class:`Scene.START`）：标题、玩法说明与“开始游戏”按钮；
+- **开始界面**（:class:`Scene.START`）：标题、玩法说明与“开始游戏”按钮，
+  页脚是“关于”入口；
+- **关于界面**（:class:`Scene.ABOUT`）：玩法、操作与制作信息，页脚按钮回主界面；
 - **游戏画面**（:class:`Scene.PLAYING`）：顶部信息栏（回到主界面 / 关卡 /
-  剩余箭头 / 用时 / 失误 / 重新开始）+ 棋盘，通关或失败时在棋盘之上叠一张结算卡片。
+  剩余箭头 / 用时 / 失误 / 重新开始）+ 棋盘，通关或失败时在棋盘之上叠一张
+  结算卡片。
 
 点击棋盘上的箭头，畅通则飞出、被阻挡则扣一次失误（见 ``board`` / ``session``）；
 失误耗尽弹出失败卡片，可重试本关；清空全部箭头弹出通关卡片，可进入下一关。
 信息栏左上角与结算卡片上都提供“回到主界面”，随时可以退回标题画面。
+
+两个菜单页的内容在 :mod:`another_arrow_rt265.ui` 里用
+:class:`~another_arrow_rt265.ui.MenuPage` 描述（有哪些说明卡片、有哪些按钮、
+按钮对应哪个动作），本模块只负责“接线”：把按钮的 ``action`` 名分发到
+:meth:`Game._run_action` 的动作表，并在按下 Enter / 空格时触发页面的默认按钮。
+**新增一个界面时，写一个 ``MenuPage``、加一个 ``Scene`` 成员、再往动作表里补一行即可。**
 """
 
 from __future__ import annotations
@@ -26,6 +35,9 @@ class Scene(Enum):
 
     START = "start"
     """开始界面：等待玩家点击“开始游戏”，此时不响应棋盘点击。"""
+
+    ABOUT = "about"
+    """关于界面：玩法、操作与制作信息，只有一个“返回主界面”按钮。"""
 
     PLAYING = "playing"
     """游戏画面：棋盘、信息栏与结算卡片（结算状态由 ``Session`` 决定）。"""
@@ -78,6 +90,20 @@ class Game:
         self.session.load_level(0)
         self.scene = Scene.START
 
+    def show_about(self) -> None:
+        """切到“关于”界面（返回主界面走 :meth:`return_to_start`）。"""
+        self.scene = Scene.ABOUT
+
+    def _menu_page(self) -> ui.MenuPage:
+        """返回当前菜单页的页面描述（只在开始 / 关于这类菜单画面上调用）。
+
+        关卡总数与失误上限取自会话，所以“关于”界面里的数字与开始界面页脚
+        提示行是同一个口径。
+        """
+        if self.scene is Scene.ABOUT:
+            return ui.about_page(self.session.total_levels, self.session.max_mistakes)
+        return ui.start_page(self.session.total_levels, self.session.max_mistakes)
+
     def _handle_events(self) -> None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -90,14 +116,14 @@ class Game:
                 self._handle_click(event.pos)
 
     def _handle_click(self, position: tuple[int, int]) -> None:
-        """处理左键点击：先判当前画面的按钮，再落到棋盘。
+        """处理左键点击：菜单页按声明的按钮命中，游戏画面先判按钮再落到棋盘。
 
-        开始界面只响应“开始游戏”按钮；游戏画面左上角与结算卡片左下角都有
+        菜单页上的按钮来自 :class:`~another_arrow_rt265.ui.MenuPage` 的描述，
+        因此新增界面时这里不必再改；游戏画面左上角与结算卡片左下角都有
         “回到主界面”；结算界面其余区域不响应棋盘点击。
         """
-        if self.scene is Scene.START:
-            if ui.start_button_rect().collidepoint(position):
-                self.start()
+        if self.scene is not Scene.PLAYING:
+            self._handle_menu_click(position)
             return
 
         if not self.session.is_playing:
@@ -114,50 +140,82 @@ class Game:
         else:
             self.session.click(position)
 
-    def _handle_key(self, key: int) -> None:
-        """处理按键：``Esc`` 退出，``Enter`` / 空格触发主按钮，``R`` 重开本关。
+    def _handle_menu_click(self, position: tuple[int, int]) -> None:
+        """把点击派给当前菜单页上声明过的按钮（绘制与命中判定共用同一份坐标）。"""
+        for button, rect in ui.menu_layout(self._menu_page()).buttons:
+            if rect.collidepoint(position):
+                self._run_action(button.action)
+                return
 
-        ``R``、``H`` 与左右方向键只在游戏画面生效；开始界面只认 ``Esc``
-        与主按钮快捷键。
+    def _handle_key(self, key: int) -> None:
+        """处理按键：``Esc`` 退出，``Enter`` / 空格触发主按钮，``H`` 回主界面。
+
+        ``H`` 在菜单页与游戏画面都生效；``R`` 与左右方向键只在游戏画面生效，
+        免得在开始界面误触改掉进度。
         """
         if key == pygame.K_ESCAPE:
             self.running = False
-            return
-        if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
             self._run_primary_action()
-            return
-        if self.scene is Scene.START:
-            return
-
-        if key == pygame.K_r:
-            self.session.restart_level()
         elif key == pygame.K_h:
             self.return_to_start()
-        elif key == pygame.K_LEFT:
-            self.session.load_level(self.session.level_index - 1)
-        elif key == pygame.K_RIGHT:
-            self.session.load_level(self.session.level_index + 1)
+        elif self.scene is Scene.PLAYING:
+            if key == pygame.K_r:
+                self.session.restart_level()
+            elif key == pygame.K_LEFT:
+                self.session.load_level(self.session.level_index - 1)
+            elif key == pygame.K_RIGHT:
+                self.session.load_level(self.session.level_index + 1)
 
     def _run_primary_action(self) -> None:
         """执行当前画面的主按钮动作（按钮点击与 Enter / 空格共用入口）。
 
-        开始界面是“开始游戏”，游戏画面里进行中不作处理（避免误触丢进度），
-        结算后则分别是“重试本关”与“下一关”（最后一关回到第 1 关重开一轮）。
-        想回主界面走旁边的“回到主界面”按钮或 ``H`` 键，不共用这个入口。
+        菜单页取 :meth:`ui.MenuPage.default_action`（主按钮优先），因此新增页面
+        只要声明了按钮就自动获得 Enter / 空格支持；游戏画面里进行中不作处理
+        （避免误触丢进度），结算后则分别是“重试本关”与“下一关”（最后一关回到
+        第 1 关重开一轮）。想回主界面走旁边的“回到主界面”按钮或 ``H`` 键，
+        不共用这个入口。
         """
-        if self.scene is Scene.START:
-            self.start()
-        elif self.session.status is GameStatus.FAILED:
-            self.session.restart_level()
-        elif self.session.status is GameStatus.LEVEL_CLEARED:
-            self.session.advance()
+        if self.scene is Scene.PLAYING:
+            if self.session.status is GameStatus.FAILED:
+                self.session.restart_level()
+            elif self.session.status is GameStatus.LEVEL_CLEARED:
+                self.session.advance()
+            return
+
+        action = self._menu_page().default_action()
+        if action is not None:
+            self._run_action(action)
+
+    def _run_action(self, action: str) -> None:
+        """执行菜单动作。
+
+        这是界面与逻辑之间唯一的接口：``ui`` 里的按钮只声明动作名，具体做什么
+        都在这个表里。新增一个界面时，把它的按钮动作补到这里即可。
+
+        Raises:
+            KeyError: 动作名没有登记（通常是按钮写错了 ``action``）。
+        """
+        actions = {
+            "start": self.start,
+            "about": self.show_about,
+            "home": self.return_to_start,
+        }
+        handler = actions.get(action)
+        if handler is None:
+            msg = f"未注册的菜单动作：{action}"
+            raise KeyError(msg)
+        handler()
 
     def _draw(self) -> None:
-        if self.scene is Scene.START:
-            ui.draw_start_screen(self.screen, self.session, pygame.mouse.get_pos())
-        else:
+        mouse = pygame.mouse.get_pos()
+        if self.scene is Scene.PLAYING:
             # 柔光跟着棋盘走，让棋盘看起来是画面的视觉中心。
             ui.draw_background(self.screen, self.session.board.rect.center)
             self.session.board.draw(self.screen)
-            ui.draw_ui(self.screen, self.session, pygame.mouse.get_pos())
+            ui.draw_ui(self.screen, self.session, mouse)
+        elif self.scene is Scene.ABOUT:
+            ui.draw_about_screen(self.screen, self.session, mouse)
+        else:
+            ui.draw_start_screen(self.screen, self.session, mouse)
         pygame.display.flip()

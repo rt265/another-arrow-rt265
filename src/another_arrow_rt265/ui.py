@@ -1,17 +1,24 @@
-"""开始界面、信息栏（HUD）与结算覆盖层的绘制。
+"""菜单页（开始 / 关于）、信息栏（HUD）与结算覆盖层的绘制。
 
 本模块只负责“画”，不修改任何游戏状态：按钮位置由 :func:`start_button_rect`、
 :func:`hud_home_button_rect`、:func:`restart_button_rect`、
 :func:`overlay_button_rect` 与 :func:`overlay_home_button_rect` 暴露给
 :class:`~another_arrow_rt265.game.Game` 做命中判定，因此以后调排版只需要改这一个文件。
 
-窗口一共有三种画面：
+窗口一共有四类画面：
 
-- 开始界面：标题、方向箭头装饰、主按钮与“玩法”说明卡片；
+- 菜单页：大标题 + 副标题 +（可选）方向箭头装饰 +（可选）主按钮 + 若干说明卡片
+  + 提示行 + 页脚按钮。开始界面与关于界面都是菜单页，只是内容不同；
 - 进行中：左上角“回到主界面”、关卡 / 剩余箭头 / 用时 / 失误四块统计卡片，
   右侧“重新开始”按钮；
 - 通关 / 失败：叠加遮罩与卡片（正文下方额外报一下本关用时），
   底部并排“回到主界面”与主按钮（下一关 / 重试本关 / 再来一轮）。
+
+菜单页的“接口”是 :class:`MenuPage`：页面用数据描述自己有哪些说明卡片与按钮，
+排版、绘制与命中判定都由 :func:`menu_layout` 统一算出来；按钮不直接绑定行为，
+只声明一个动作名，由 :meth:`~another_arrow_rt265.game.Game._run_action` 分发。
+因此**新增一个界面（关卡选择、设置……）只需要写一个 :class:`MenuPage` 常量，
+再在动作表里补一行**，不必再写一遍排版、绘制与事件分发代码。
 
 组件的视觉效果统一由 :func:`_draw_panel` / :func:`_draw_primary_button` /
 :func:`_draw_secondary_button` 提供：圆角渐变底板 + 描边 + 柔和投影，配色取自
@@ -22,6 +29,8 @@ from __future__ import annotations
 
 import functools
 import math
+from dataclasses import dataclass
+from enum import Enum
 from typing import Final
 
 import pygame
@@ -94,28 +103,48 @@ _OVERLAY_BUTTON_SIZE: Final[tuple[int, int]] = (196, 56)
 _OVERLAY_BUTTON_GAP: Final[int] = 16
 _OVERLAY_BUTTON_MARGIN: Final[int] = 34
 
-# 开始界面：标题、方向箭头装饰、主按钮与“玩法”卡片。
+# 菜单页（开始 / 关于，以及后续新增的同类页面）：自上而下依次是
+# 大标题 → 副标题 →（可选）方向箭头装饰 →（可选）主按钮 → 说明卡片 → 提示行
+# → 页脚按钮。页脚按钮贴着页面底部排，因此各页面的“返回 / 次要入口”总在同一个位置。
 _GAME_TITLE: Final[str] = "一箭又一箭"
 _GAME_SUBTITLE: Final[str] = "ANOTHER ARROW"
-_HERO_TITLE_Y: Final[int] = 140
-_HERO_SUBTITLE_Y: Final[int] = 212
-_HERO_GLOW_ALPHA: Final[int] = 80
+_PAGE_TITLE_Y: Final[int] = 126
+_PAGE_SUBTITLE_Y: Final[int] = 194
+_PAGE_GLOW_ALPHA: Final[int] = 80
+# 方向箭头装饰的中心（只出现在开始界面）。
+_PAGE_DECORATION_Y: Final[int] = 248
+# 主按钮行的中心：排在标题装饰与说明卡片之间。
+_PAGE_HERO_BUTTON_Y: Final[int] = 340
+# 说明卡片的起点：有主按钮时排在按钮下方，否则直接从副标题底下开始。
+_PAGE_SECTIONS_TOP: Final[int] = 420
+_PAGE_SECTIONS_TOP_PLAIN: Final[int] = 272
+_PAGE_SECTION_GAP: Final[int] = 18
+_PAGE_HINT_GAP: Final[int] = 8
+_PAGE_FOOTER_MARGIN: Final[int] = 32
+_MENU_BUTTON_GAP: Final[int] = 16
+_HERO_BUTTON_SIZE: Final[tuple[int, int]] = (264, 64)
+_FOOTER_BUTTON_SIZE: Final[tuple[int, int]] = (196, 56)
+
 _HERO_CHIP_SIZE: Final[int] = 52
 _HERO_CHIP_GAP: Final[int] = 18
-_HERO_CHIP_CENTER_Y: Final[int] = 272
 _HERO_DIRECTIONS: Final[tuple[Direction, ...]] = (
     Direction.RIGHT,
     Direction.UP,
     Direction.LEFT,
     Direction.DOWN,
 )
-_START_BUTTON_SIZE: Final[tuple[int, int]] = (264, 64)
-_START_BUTTON_CENTER_Y: Final[int] = 368
-_START_HINT_Y: Final[int] = 428
-_RULES_PANEL_SIZE: Final[tuple[int, int]] = (540, 158)
-_RULES_PANEL_TOP: Final[int] = 468
-_RULES_PADDING: Final[int] = 28
-_RULES_LINE_HEIGHT: Final[int] = 30
+
+# 说明卡片：一行小标题 + 若干行带圆点的正文。高度按正文行数推出来——
+# 小标题占 66px，之后每行 30px，行文字本身按 24px 算（17 号字的高度），
+# 最后留 8px 底边距，于是三行正文刚好是 158px，与旧的“玩法”卡片一样高。
+_SECTION_WIDTH: Final[int] = 540
+_SECTION_RADIUS: Final[int] = 24
+_SECTION_PADDING: Final[int] = 28
+_SECTION_CAPTION_TOP: Final[int] = 20
+_SECTION_FIRST_LINE_TOP: Final[int] = 66
+_SECTION_LINE_HEIGHT: Final[int] = 30
+_SECTION_TEXT_HEIGHT: Final[int] = 24
+_SECTION_BOTTOM_PADDING: Final[int] = 8
 _RULES: Final[tuple[str, ...]] = (
     "点击箭头，前方没有阻挡时它会飞出棋盘",
     "被挡住的箭头飞不出去，还会消耗一次失误",
@@ -125,6 +154,150 @@ _RULES: Final[tuple[str, ...]] = (
 # 组件投影 / 光晕的默认扩散半径。
 _SHADOW_SPREAD: Final[int] = 8
 _GLOW_SPREAD: Final[int] = 7
+
+
+# ---------------------------------------------------------------- 菜单页描述
+# 下面这组数据结构是“新增界面”的接口：界面用它们描述自己有什么内容，
+# 排版与绘制交给 :func:`menu_layout` 与 :func:`draw_menu_page`。
+
+
+@dataclass(frozen=True)
+class MenuSection:
+    """菜单页上的一块说明卡片：一行小标题 + 若干行正文。"""
+
+    caption: str
+    lines: tuple[str, ...]
+
+    @property
+    def height(self) -> int:
+        """卡片高度：按正文行数自适应，保证文字上下留白一致。"""
+        return (
+            _SECTION_FIRST_LINE_TOP
+            + max(0, len(self.lines) - 1) * _SECTION_LINE_HEIGHT
+            + _SECTION_TEXT_HEIGHT
+            + _SECTION_BOTTOM_PADDING
+        )
+
+
+class MenuButtonPlacement(Enum):
+    """按钮在菜单页上的位置。"""
+
+    HERO = "hero"
+    """主按钮：方向箭头装饰下方、说明卡片之前。"""
+
+    FOOTER = "footer"
+    """页脚按钮：说明卡片之后，整排居中并贴住页面底部留白。"""
+
+
+@dataclass(frozen=True)
+class MenuButton:
+    """菜单页上的一个按钮。
+
+    ``action`` 是交给 ``Game`` 分发的动作名：``ui`` 只声明“这个按钮长什么样、
+    点了要做哪个动作”，具体做什么由
+    :meth:`~another_arrow_rt265.game.Game._run_action` 决定，因此新增页面不必改动
+    绘制与事件分发代码。
+    """
+
+    action: str
+    text: str
+    icon: icons.Icon
+    primary: bool = False
+    placement: MenuButtonPlacement = MenuButtonPlacement.FOOTER
+
+
+@dataclass(frozen=True)
+class MenuPage:
+    """一个菜单页的内容描述（排版由 :func:`menu_layout` 统一算出来）。"""
+
+    title: str
+    subtitle: str
+    sections: tuple[MenuSection, ...] = ()
+    buttons: tuple[MenuButton, ...] = ()
+    decorations: bool = False
+    hint: str | None = None
+
+    def default_action(self) -> str | None:
+        """返回按下 Enter / 空格时触发的动作：主按钮优先，其次是第一个按钮。"""
+        for button in self.buttons:
+            if button.primary:
+                return button.action
+        return self.buttons[0].action if self.buttons else None
+
+
+@dataclass(frozen=True)
+class MenuLayout:
+    """一个菜单页算好的骨架坐标（绘制与命中判定共用同一份结果）。"""
+
+    sections: tuple[pygame.Rect, ...]
+    hint: pygame.Rect | None
+    buttons: tuple[tuple[MenuButton, pygame.Rect], ...]
+
+
+_RULES_SECTION: Final[MenuSection] = MenuSection("玩法", _RULES)
+
+
+@functools.cache
+def start_page(total_levels: int, max_mistakes: int) -> MenuPage:
+    """返回开始界面的页面描述。
+
+    Args:
+        total_levels: 关卡总数，用于页脚的提示行。
+        max_mistakes: 每关的失误次数上限，同上。
+    """
+    return MenuPage(
+        title=_GAME_TITLE,
+        subtitle=_GAME_SUBTITLE,
+        sections=(_RULES_SECTION,),
+        buttons=(
+            MenuButton(
+                "start",
+                "开始游戏",
+                icons.Icon.NEXT,
+                primary=True,
+                placement=MenuButtonPlacement.HERO,
+            ),
+            MenuButton("about", "关于", icons.Icon.INFO),
+        ),
+        decorations=True,
+        hint=f"共 {total_levels} 关 · 每关最多 {max_mistakes} 次失误",
+    )
+
+
+@functools.cache
+def about_page(total_levels: int, max_mistakes: int) -> MenuPage:
+    """返回“关于”界面的页面描述。
+
+    Args:
+        total_levels: 关卡总数，与开始界面的提示行同源。
+        max_mistakes: 每关的失误次数上限，同上。
+    """
+    return MenuPage(
+        title="关于",
+        subtitle="ABOUT",
+        sections=(
+            MenuSection(
+                "玩法与操作",
+                (
+                    "点击箭头，前方没有阻挡时它会飞出棋盘",
+                    "被挡住的箭头飞不出去，还会消耗一次失误",
+                    "鼠标左键点击 · R 重开本关 · H 回主界面",
+                ),
+            ),
+            MenuSection(
+                "制作信息",
+                (
+                    (
+                        f"版本 {config.VERSION} · 共 {total_levels} 关 "
+                        f"· 每关 {max_mistakes} 次失误上限"
+                    ),
+                    "Python 3.13 · pygame-ce · UV · Ruff · ty · Nuitka",
+                    "图标与箭头全部由代码绘制，未使用第三方素材",
+                ),
+            ),
+        ),
+        buttons=(MenuButton("home", "返回主界面", icons.Icon.HOME),),
+    )
 
 
 @functools.cache
@@ -433,17 +606,101 @@ def restart_button_rect() -> pygame.Rect:
 
 def start_button_rect() -> pygame.Rect:
     """返回开始界面上“开始游戏”按钮的区域。"""
-    rect = pygame.Rect((0, 0), _START_BUTTON_SIZE)
-    rect.center = (config.WINDOW_WIDTH // 2, _START_BUTTON_CENTER_Y)
-    return rect
+    return _hero_row_rects(1)[0]
 
 
 def rules_panel_rect() -> pygame.Rect:
-    """返回开始界面下方“玩法”说明卡片的区域。"""
-    rect = pygame.Rect((0, 0), _RULES_PANEL_SIZE)
-    rect.centerx = config.WINDOW_WIDTH // 2
-    rect.top = _RULES_PANEL_TOP
-    return rect
+    """返回开始界面“玩法”卡片的区域。"""
+    return _stack_sections((_RULES_SECTION,), _PAGE_SECTIONS_TOP)[0]
+
+
+def about_button_rect() -> pygame.Rect:
+    """返回开始界面页脚“关于”按钮的区域。"""
+    return _footer_row_rects(1)[0]
+
+
+def about_back_button_rect() -> pygame.Rect:
+    """返回“关于”界面页脚“返回主界面”按钮的区域。"""
+    return _footer_row_rects(1)[0]
+
+
+def _stack_sections(
+    sections: tuple[MenuSection, ...], top: int
+) -> tuple[pygame.Rect, ...]:
+    """把说明卡片自上而下排开，返回它们的区域。"""
+    left = (config.WINDOW_WIDTH - _SECTION_WIDTH) // 2
+    rects: list[pygame.Rect] = []
+    cursor = top
+    for index, section in enumerate(sections):
+        cursor += _PAGE_SECTION_GAP if index else 0
+        rect = pygame.Rect(left, cursor, _SECTION_WIDTH, section.height)
+        rects.append(rect)
+        cursor = rect.bottom
+    return tuple(rects)
+
+
+def _hero_row_rects(count: int) -> tuple[pygame.Rect, ...]:
+    """返回主按钮行的区域（居中排在标题装饰下方）。"""
+    width, height = _HERO_BUTTON_SIZE
+    left = _row_left(count, width)
+    top = _PAGE_HERO_BUTTON_Y - height // 2
+    return tuple(
+        pygame.Rect(left + index * (width + _MENU_BUTTON_GAP), top, width, height)
+        for index in range(count)
+    )
+
+
+def _footer_row_rects(count: int) -> tuple[pygame.Rect, ...]:
+    """返回页脚按钮行的区域（居中，并与页面底部留白对齐）。"""
+    width, height = _FOOTER_BUTTON_SIZE
+    left = _row_left(count, width)
+    top = config.WINDOW_HEIGHT - _PAGE_FOOTER_MARGIN - height
+    return tuple(
+        pygame.Rect(left + index * (width + _MENU_BUTTON_GAP), top, width, height)
+        for index in range(count)
+    )
+
+
+def _row_left(count: int, width: int) -> int:
+    """返回 ``count`` 个宽 ``width`` 的按钮横向居中时的左边界。"""
+    row_width = count * width + max(0, count - 1) * _MENU_BUTTON_GAP
+    return (config.WINDOW_WIDTH - row_width) // 2
+
+
+def menu_layout(page: MenuPage) -> MenuLayout:
+    """算出一个菜单页的骨架坐标：说明卡片、提示行与按钮。
+
+    绘制（:func:`draw_menu_page`）与命中判定（``Game._handle_menu_click``）都读
+    这一份结果，因此按钮画在哪里就能点在哪里，不会两边各算一遍而错位。
+    """
+    hero = tuple(b for b in page.buttons if b.placement is MenuButtonPlacement.HERO)
+    footer = tuple(b for b in page.buttons if b.placement is MenuButtonPlacement.FOOTER)
+
+    sections = _stack_sections(
+        page.sections, _PAGE_SECTIONS_TOP if hero else _PAGE_SECTIONS_TOP_PLAIN
+    )
+    hint = None
+    if page.hint is not None:
+        bottom = sections[-1].bottom if sections else _PAGE_SECTIONS_TOP_PLAIN
+        hint = pygame.Rect(
+            (config.WINDOW_WIDTH - _SECTION_WIDTH) // 2,
+            bottom + _PAGE_HINT_GAP,
+            _SECTION_WIDTH,
+            _SECTION_TEXT_HEIGHT,
+        )
+
+    hero_rects = _hero_row_rects(len(hero))
+    footer_rects = _footer_row_rects(len(footer))
+    buttons: list[tuple[MenuButton, pygame.Rect]] = []
+    hero_index = footer_index = 0
+    for button in page.buttons:
+        if button.placement is MenuButtonPlacement.HERO:
+            buttons.append((button, hero_rects[hero_index]))
+            hero_index += 1
+        else:
+            buttons.append((button, footer_rects[footer_index]))
+            footer_index += 1
+    return MenuLayout(sections=sections, hint=hint, buttons=tuple(buttons))
 
 
 def overlay_card_rect() -> pygame.Rect:
@@ -687,49 +944,82 @@ def _draw_result_emblem(
         )
 
 
+def draw_menu_page(
+    surface: pygame.Surface,
+    page: MenuPage,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """绘制一个菜单页（连背景一起画，因为它独占整屏）。
+
+    Args:
+        surface: 绘制目标。
+        page: 页面内容描述，排版由 :func:`menu_layout` 统一算出来。
+        mouse: 鼠标位置，仅用于按钮的悬停高亮；为 ``None`` 时不显示悬停效果。
+    """
+    draw_background(surface)
+    _draw_page_title(surface, page)
+    if page.decorations:
+        _draw_arrow_row(surface)
+
+    layout = menu_layout(page)
+    for rect, section in zip(layout.sections, page.sections, strict=True):
+        _draw_section_panel(surface, rect, section)
+    if layout.hint is not None and page.hint is not None:
+        hint = _font(_FONT_CAPTION).render(page.hint, True, config.COLOR_TEXT_MUTED)
+        surface.blit(hint, hint.get_rect(center=layout.hint.center))
+    for button, rect in layout.buttons:
+        _draw_menu_button(surface, button, rect, mouse)
+
+
 def draw_start_screen(
     surface: pygame.Surface,
     session: Session,
     mouse: tuple[int, int] | None = None,
 ) -> None:
-    """绘制开始界面（连背景一起画，因为它独占整屏）。
+    """绘制开始界面（页面内容见 :func:`start_page`）。
 
     Args:
         surface: 绘制目标。
-        session: 当前会话，用于在页脚标注总关卡数与每关的失误次数上限。
-        mouse: 鼠标位置，仅用于“开始游戏”按钮的悬停高亮。
+        session: 当前会话，页脚提示行用它报出关卡总数与失误次数上限。
+        mouse: 鼠标位置，仅用于按钮的悬停高亮。
     """
-    draw_background(surface)
-    _draw_hero_title(surface)
-    _draw_arrow_row(surface)
-    _draw_primary_button(
-        surface,
-        start_button_rect(),
-        "开始游戏",
-        config.COLOR_PRIMARY,
-        mouse,
-        icon=icons.Icon.NEXT,
+    draw_menu_page(
+        surface, start_page(session.total_levels, session.max_mistakes), mouse
     )
 
-    panel = rules_panel_rect()
-    _draw_rules_panel(surface, panel)
+
+def draw_about_screen(
+    surface: pygame.Surface,
+    session: Session,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """绘制“关于”界面（页面内容见 :func:`about_page`）。
+
+    Args:
+        surface: 绘制目标。
+        session: 当前会话，关卡总数与失误上限的文案与开始界面同源。
+        mouse: 鼠标位置，仅用于按钮的悬停高亮。
+    """
+    draw_menu_page(
+        surface, about_page(session.total_levels, session.max_mistakes), mouse
+    )
 
 
-def _draw_hero_title(surface: pygame.Surface) -> None:
-    """画开始界面的标题：金色柔光垫底 + 主色文字 + 拉开字距的英文副标题。"""
+def _draw_page_title(surface: pygame.Surface, page: MenuPage) -> None:
+    """画菜单页的标题：金色柔光垫底 + 主色文字 + 拉开字距的英文副标题。"""
     center_x = config.WINDOW_WIDTH // 2
 
-    glow = _font(_FONT_HERO).render(_GAME_TITLE, True, config.COLOR_PRIMARY)
-    glow.set_alpha(_HERO_GLOW_ALPHA)
-    surface.blit(glow, glow.get_rect(center=(center_x, _HERO_TITLE_Y + 4)))
+    glow = _font(_FONT_HERO).render(page.title, True, config.COLOR_PRIMARY)
+    glow.set_alpha(_PAGE_GLOW_ALPHA)
+    surface.blit(glow, glow.get_rect(center=(center_x, _PAGE_TITLE_Y + 4)))
 
-    title = _font(_FONT_HERO).render(_GAME_TITLE, True, config.COLOR_TEXT)
-    surface.blit(title, title.get_rect(center=(center_x, _HERO_TITLE_Y)))
+    title = _font(_FONT_HERO).render(page.title, True, config.COLOR_TEXT)
+    surface.blit(title, title.get_rect(center=(center_x, _PAGE_TITLE_Y)))
 
     subtitle = _font(_FONT_SUBTITLE).render(
-        " ".join(_GAME_SUBTITLE), True, config.COLOR_TEXT_MUTED
+        " ".join(page.subtitle), True, config.COLOR_TEXT_MUTED
     )
-    surface.blit(subtitle, subtitle.get_rect(center=(center_x, _HERO_SUBTITLE_Y)))
+    surface.blit(subtitle, subtitle.get_rect(center=(center_x, _PAGE_SUBTITLE_Y)))
 
 
 def _draw_arrow_row(surface: pygame.Surface) -> None:
@@ -737,7 +1027,7 @@ def _draw_arrow_row(surface: pygame.Surface) -> None:
     count = len(_HERO_DIRECTIONS)
     total = count * _HERO_CHIP_SIZE + (count - 1) * _HERO_CHIP_GAP
     left = (config.WINDOW_WIDTH - total) // 2
-    top = _HERO_CHIP_CENTER_Y - _HERO_CHIP_SIZE // 2
+    top = _PAGE_DECORATION_Y - _HERO_CHIP_SIZE // 2
 
     for index, direction in enumerate(_HERO_DIRECTIONS):
         rect = pygame.Rect(
@@ -764,33 +1054,54 @@ def _draw_arrow_row(surface: pygame.Surface) -> None:
         )
 
 
-def _draw_rules_panel(surface: pygame.Surface, rect: pygame.Rect) -> None:
-    """画“玩法”卡片：一行小标题 + 三条带圆点的规则。"""
+def _draw_section_panel(
+    surface: pygame.Surface, rect: pygame.Rect, section: MenuSection
+) -> None:
+    """画一块说明卡片：一行小标题 + 若干行带圆点的正文。"""
     _draw_panel(
         surface,
         rect,
         config.COLOR_PANEL,
         config.COLOR_PANEL_DEEP,
-        radius=24,
+        radius=_SECTION_RADIUS,
         border=config.COLOR_PANEL_BORDER,
         shadow_spread=10,
     )
 
-    title = _font(_FONT_RULE_TITLE).render("玩法", True, config.COLOR_PRIMARY)
-    surface.blit(title, (rect.left + _RULES_PADDING, rect.top + 20))
+    caption = _font(_FONT_RULE_TITLE).render(
+        section.caption, True, config.COLOR_PRIMARY
+    )
+    surface.blit(
+        caption, (rect.left + _SECTION_PADDING, rect.top + _SECTION_CAPTION_TOP)
+    )
 
     font = _font(_FONT_RULE)
-    bullet_x = rect.left + _RULES_PADDING + 6
-    text_x = rect.left + _RULES_PADDING + 22
-    for index, rule in enumerate(_RULES):
-        y = rect.top + 66 + index * _RULES_LINE_HEIGHT
+    bullet_x = rect.left + _SECTION_PADDING + 6
+    text_x = rect.left + _SECTION_PADDING + 22
+    for index, line in enumerate(section.lines):
+        y = rect.top + _SECTION_FIRST_LINE_TOP + index * _SECTION_LINE_HEIGHT
         pygame.draw.circle(
             surface,
             config.COLOR_PRIMARY,
             (bullet_x, y + font.get_height() // 2),
             4,
         )
-        surface.blit(font.render(rule, True, config.COLOR_TEXT), (text_x, y))
+        surface.blit(font.render(line, True, config.COLOR_TEXT), (text_x, y))
+
+
+def _draw_menu_button(
+    surface: pygame.Surface,
+    button: MenuButton,
+    rect: pygame.Rect,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """画菜单按钮：样式由 :attr:`MenuButton.primary` 决定。"""
+    if button.primary:
+        _draw_primary_button(
+            surface, rect, button.text, config.COLOR_PRIMARY, mouse, icon=button.icon
+        )
+    else:
+        _draw_secondary_button(surface, rect, button.text, mouse, icon=button.icon)
 
 
 def _result_message(session: Session) -> str:

@@ -15,6 +15,10 @@ WINDOW_HEIGHT: Final[int] = 720
 WINDOW_TITLE: Final[str] = "Another Arrow"
 FPS: Final[int] = 60
 
+# ------------------------------------------------------------------ 项目
+# 显示在“关于”界面上：与 pyproject.toml 的 version 保持一致（测试会钉住这一点）。
+VERSION: Final[str] = "0.1.0"
+
 # ------------------------------------------------------------------ 布局
 # 顶部信息栏（关卡 / 剩余箭头 / 失误 / 重新开始按钮）的高度。
 HUD_HEIGHT: Final[int] = 104

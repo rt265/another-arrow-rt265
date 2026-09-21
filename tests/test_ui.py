@@ -1,4 +1,4 @@
-"""信息栏、开始界面与结算覆盖层的布局、文案与绘制冒烟测试。"""
+"""菜单页、信息栏与结算覆盖层的布局、文案与绘制冒烟测试。"""
 
 from __future__ import annotations
 
@@ -150,7 +150,88 @@ def test_start_screen_content_fits_inside_the_window() -> None:
     assert panel.bottom <= config.WINDOW_HEIGHT
 
 
+# ---------------------------------------------------------------- 菜单页
+
+
+def test_menu_pages_stack_their_blocks_inside_the_window() -> None:
+    """菜单页的每一块内容（卡片 / 提示行 / 按钮）都要落在窗口里且互不重叠。"""
+    for page in (ui.start_page(3, 3), ui.about_page(3, 3)):
+        layout = ui.menu_layout(page)
+        blocks = list(layout.sections)
+        if layout.hint is not None:
+            blocks.append(layout.hint)
+        blocks.extend(rect for _, rect in layout.buttons)
+
+        for rect in blocks:
+            assert rect.left >= 0 and rect.right <= config.WINDOW_WIDTH, page.title
+            assert rect.top >= 0 and rect.bottom <= config.WINDOW_HEIGHT, page.title
+
+        # 自上而下排开：相邻两块不能叠在一起（提示行贴着卡片、按钮贴着底部）。
+        for previous, current in itertools.pairwise(
+            sorted(blocks, key=lambda rect: (rect.top, rect.left))
+        ):
+            assert not previous.colliderect(current), f"{page.title} 上有内容重叠"
+
+
+def test_menu_pages_share_the_same_footer_button_spot() -> None:
+    """两个菜单页的页脚按钮落在同一位置，返回 / 次要入口不会跳来跳去。"""
+    about = ui.about_button_rect()
+    back = ui.about_back_button_rect()
+
+    assert about == back
+    assert about.centerx == config.WINDOW_WIDTH // 2
+    assert about.bottom <= config.WINDOW_HEIGHT
+
+
+def test_menu_page_buttons_come_from_the_page_description() -> None:
+    """页面描述的按钮与菜单页实际可点的区域一一对应（绘制与命中判定同源）。"""
+    layout = ui.menu_layout(ui.start_page(3, 3))
+    actions = {button.action for button, _ in layout.buttons}
+
+    assert actions == {"start", "about"}
+    assert ui.menu_layout(ui.about_page(3, 3)).buttons[0][0].action == "home"
+
+
+def test_menu_page_text_fits_inside_its_section() -> None:
+    """卡片的每一行都要放得下：卡片宽度是按最宽的一行定的，加字前先看这里。"""
+    for page in (ui.start_page(3, 3), ui.about_page(99, 9)):
+        for rect, section in zip(
+            ui.menu_layout(page).sections, page.sections, strict=True
+        ):
+            caption = ui._font(ui._FONT_RULE_TITLE).render(
+                section.caption, True, config.COLOR_PRIMARY
+            )
+            assert caption.get_width() + 2 * ui._SECTION_PADDING <= rect.width
+
+            for line in section.lines:
+                label = ui._font(ui._FONT_RULE).render(line, True, config.COLOR_TEXT)
+                # 正文比小标题多缩进 22px（圆点与间隙），两侧再各留一份卡片内边距。
+                assert label.get_width() + 2 * ui._SECTION_PADDING + 22 <= rect.width, (
+                    line
+                )
+
+
 # ---------------------------------------------------------------- 文案
+
+
+def test_menu_pages_report_content_from_the_session() -> None:
+    """菜单页上的关卡数与失误上限跟会话走，不写死。"""
+    lines = [
+        line for section in ui.about_page(12, 5).sections for line in section.lines
+    ]
+
+    assert any(f"版本 {config.VERSION}" in line for line in lines)
+    assert any("共 12 关" in line and "5 次" in line for line in lines)
+
+    hint = ui.start_page(12, 5).hint
+    assert hint is not None, "开始界面应当用提示行报出关卡数"
+    assert "共 12 关" in hint
+
+
+def test_menu_pages_pick_a_default_action_for_enter() -> None:
+    """Enter / 空格触发页面的默认按钮：开始界面是“开始游戏”，关于界面是“返回”。"""
+    assert ui.start_page(3, 3).default_action() == "start"
+    assert ui.about_page(3, 3).default_action() == "home"
 
 
 def test_overlay_button_text_follows_the_status() -> None:
@@ -277,6 +358,37 @@ def test_draw_start_screen_covers_the_whole_window() -> None:
     assert surface.get_at((2, config.WINDOW_HEIGHT - 3))[:3] != (255, 0, 255), (
         "开始界面应该连背景一起画，不留未覆盖的角落"
     )
+
+
+def test_draw_about_screen_renders_without_error() -> None:
+    surface = _surface()
+    session = _session()
+
+    ui.draw_about_screen(surface, session)
+    ui.draw_about_screen(surface, session, mouse=ui.about_back_button_rect().center)
+
+
+def test_draw_about_screen_covers_the_whole_window() -> None:
+    surface = _surface()
+    surface.fill((255, 0, 255))
+
+    ui.draw_about_screen(surface, _session())
+
+    assert surface.get_at((2, 2))[:3] != (255, 0, 255), (
+        "关于界面应该连背景一起画，不留未覆盖的角落"
+    )
+
+
+def test_menu_pages_are_visually_distinct() -> None:
+    """两张菜单页的内容不同，不能画出同一张图（防止画错页面）。"""
+    start = _surface()
+    about = _surface()
+    session = _session()
+
+    ui.draw_start_screen(start, session)
+    ui.draw_about_screen(about, session)
+
+    assert pygame.image.tobytes(start, "RGB") != pygame.image.tobytes(about, "RGB")
 
 
 def test_draw_background_paints_a_top_to_bottom_gradient() -> None:
