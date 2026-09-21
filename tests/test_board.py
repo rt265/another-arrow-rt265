@@ -246,6 +246,12 @@ def test_direction_delta_and_symbol_roundtrip() -> None:
         from_symbol("x")
 
 
+def test_direction_vector_matches_delta_in_screen_coordinates() -> None:
+    for direction in Direction:
+        delta_row, delta_col = direction.delta
+        assert direction.vector == (float(delta_col), float(delta_row))
+
+
 def test_invalid_level_raises_value_error() -> None:
     with pytest.raises(ValueError):
         Board((), AREA)
@@ -253,3 +259,200 @@ def test_invalid_level_raises_value_error() -> None:
         Board(("^..", ".v"), AREA)
     with pytest.raises(ValueError):
         Board(("^..", ".x."), AREA)
+
+
+# ---------------------------------------------------------------- 动画与提示
+
+# 三个箭头互不阻挡，用于验证“清空棋盘”与“动画仍在播放”可以并存。
+FLY_LEVEL = (
+    ">..",
+    "..^",
+    ".<.",
+)
+
+_PANEL_PADDING = 2 * config.CELL_GAP
+
+
+def test_cleared_arrow_leaves_grid_before_animation_finishes() -> None:
+    board = Board(CHAIN_LEVEL, AREA)
+    arrow = board.arrow_at(0, 1)
+    assert arrow is not None
+    origin = board.cell_rect(0, 1).center
+
+    assert _click(board, arrow) is ClickResult.CLEARED
+
+    # 网格里立即消失：不再阻挡后续点击，也点不到。
+    assert board.arrow_at(0, 1) is None
+    assert board.remaining == 1
+    assert _click(board, arrow) is ClickResult.MISS
+    assert board.remove(arrow) is False
+
+    blocked = board.arrow_at(0, 0)
+    assert blocked is not None
+    assert board.is_path_clear(blocked) is True
+
+    # 同时又留下了一段飞出动画。
+    assert len(board.flying) == 1
+    flying = board.flying[0]
+    assert flying.arrow == arrow
+    assert flying.position == pytest.approx(origin)
+    assert flying.progress == 0.0
+    assert flying.finished is False
+
+
+def test_fly_out_animation_ends_after_configured_duration() -> None:
+    board = Board(CHAIN_LEVEL, AREA)
+    arrow = board.arrow_at(0, 1)
+    assert arrow is not None
+    origin = board.cell_rect(0, 1).center
+    assert _click(board, arrow) is ClickResult.CLEARED
+
+    flying = board.flying[0]
+    board.update(config.FLY_OUT_SECONDS / 2)
+
+    # 飞出动画是缓入的：过了一半时间时才走了不到一半路程。
+    assert flying.progress == pytest.approx(0.5**config.FLY_OUT_EASE_POWER)
+    assert 0.0 < flying.progress < 0.5
+    assert flying.position[1] > origin[1]  # (0,1) 是向下的箭头
+
+    board.update(config.FLY_OUT_SECONDS / 2)
+    panel = board.rect.inflate(_PANEL_PADDING, _PANEL_PADDING)
+    assert flying.finished is True
+    assert not panel.collidepoint(flying.position)
+    assert board.flying == []
+
+
+@pytest.mark.parametrize("direction", list(Direction))
+def test_fly_out_always_exits_the_board(direction: Direction) -> None:
+    board = Board(("." + direction.value + ".", "...", "..."), AREA)
+    arrow = board.arrow_at(0, 1)
+    assert arrow is not None
+    origin_x, origin_y = board.cell_rect(0, 1).center
+    assert _click(board, arrow) is ClickResult.CLEARED
+
+    flying = board.flying[0]
+    unit_x, unit_y = direction.vector
+    board.update(config.FLY_OUT_SECONDS)
+
+    offset_x = flying.position[0] - origin_x
+    offset_y = flying.position[1] - origin_y
+    assert (offset_x, offset_y) == pytest.approx(
+        (unit_x * flying.distance, unit_y * flying.distance)
+    )
+    assert flying.distance > board.cell_size  # 至少飞出一格，确保完全消失
+    assert not board.rect.collidepoint(flying.position)
+
+
+def test_board_can_be_cleared_while_animations_are_playing() -> None:
+    board = Board(FLY_LEVEL, AREA)
+    for arrow in board.arrows:
+        assert _click(board, arrow) is ClickResult.CLEARED
+
+    assert board.is_cleared is True
+    assert board.remaining == 0
+    assert len(board.flying) == 3
+
+    board.update(config.FLY_OUT_SECONDS * 0.5)
+    assert len(board.flying) == 3  # 三个动画同时开始，因此同时结束
+
+    board.update(config.FLY_OUT_SECONDS)
+    assert board.flying == []
+
+
+def test_shake_offset_pushes_along_direction_then_springs_back() -> None:
+    board = Board(CHAIN_LEVEL, AREA)
+    blocked = board.arrow_at(0, 0)  # 向右的箭头
+    assert blocked is not None
+    assert board.shake_offset == (0.0, 0.0)
+
+    assert _click(board, blocked) is ClickResult.BLOCKED
+    assert board.shake_offset == pytest.approx((0.0, 0.0))
+
+    # 第一个四分之一周期：沿箭头方向被推出去。
+    board.update(config.BLOCKED_FLASH_SECONDS * 0.125)
+    pushed = board.shake_offset
+    assert pushed[0] > 0.0
+    assert pushed[1] == pytest.approx(0.0)
+
+    # 第二个四分之一周期：弹回到原位之后（幅度也更小）。
+    board.update(config.BLOCKED_FLASH_SECONDS * 0.25)
+    spring_back = board.shake_offset
+    assert spring_back[0] < 0.0
+    assert abs(spring_back[0]) < abs(pushed[0])
+
+    # 提示结束后精确归零，箭头不会停在偏移位置上。
+    board.update(config.BLOCKED_FLASH_SECONDS)
+    assert board.blocked_flash is None
+    assert board.shake_offset == (0.0, 0.0)
+
+
+def test_flash_progress_runs_from_zero_to_one() -> None:
+    board = Board(CHAIN_LEVEL, AREA)
+    blocked = board.arrow_at(0, 0)
+    assert blocked is not None
+    assert board.flash_progress == 1.0  # 没有提示时视为已结束
+
+    assert _click(board, blocked) is ClickResult.BLOCKED
+    assert board.flash_progress == 0.0
+
+    board.update(config.BLOCKED_FLASH_SECONDS * 0.25)
+    assert board.flash_progress == pytest.approx(0.25)
+
+    board.update(config.BLOCKED_FLASH_SECONDS)
+    assert board.flash_progress == 1.0
+
+
+def test_blocker_hint_follows_the_current_blocker() -> None:
+    board = Board(CHAIN_LEVEL, AREA)
+    blocked = board.arrow_at(0, 0)
+    blocker = board.arrow_at(0, 1)
+    assert blocked is not None and blocker is not None
+    assert board.blocker_hint is None
+
+    assert _click(board, blocked) is ClickResult.BLOCKED
+    assert board.blocker_hint == blocker
+
+    # 阻挡者被清掉后，提示立即失效，不会继续指向已经不存在的箭头。
+    assert _click(board, blocker) is ClickResult.CLEARED
+    assert board.blocker_hint is None
+
+    # 路径畅通后原来的箭头就可以飞出了。
+    assert _click(board, blocked) is ClickResult.CLEARED
+    assert board.remaining == 0
+
+
+def test_removing_flashed_arrow_clears_animation_state() -> None:
+    board = Board(CROSS_LEVEL, AREA)
+    arrow = board.arrow_at(0, 1)
+    assert arrow is not None
+    assert _click(board, arrow) is ClickResult.BLOCKED
+    board.update(config.BLOCKED_FLASH_SECONDS * 0.125)
+    assert board.shake_offset != (0.0, 0.0)
+
+    assert board.remove(arrow) is True
+    assert board.blocked_flash is None
+    assert board.shake_offset == (0.0, 0.0)
+    assert board.blocker_hint is None
+
+
+def test_draw_handles_blocked_and_flying_arrows() -> None:
+    """绘制冒烟测试：抖动、火花、虚线与飞出动画都能在同一帧内画完。"""
+    board = Board(CHAIN_LEVEL, AREA)
+    surface = pygame.Surface(AREA.size)
+
+    blocked = board.arrow_at(0, 0)
+    assert blocked is not None
+    assert _click(board, blocked) is ClickResult.BLOCKED
+    board.update(config.BLOCKED_FLASH_SECONDS * 0.125)
+    board.draw(surface)
+
+    cleared = board.arrow_at(0, 1)
+    assert cleared is not None
+    assert _click(board, cleared) is ClickResult.CLEARED
+    board.update(config.FLY_OUT_SECONDS * 0.5)
+    board.draw(surface)
+    assert len(board.flying) == 1
+
+    board.update(config.FLY_OUT_SECONDS)
+    board.draw(surface)
+    assert board.flying == []
