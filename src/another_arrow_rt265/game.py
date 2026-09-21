@@ -1,8 +1,8 @@
 """游戏主循环。
 
 当前阶段实现“窗口 + 棋盘 + 点击移除箭头”的可玩流程：
-点击前方畅通的箭头会把箭头移出棋盘，撞到其他箭头时给出闪烁提示。
-失误次数、结算界面与飞出动画将在后续事项中加入。
+点击前方畅通的箭头会把箭头移出棋盘（并播放飞出动画），撞到其他箭头时给出
+抖动、火花与阻挡者高亮的碰撞提示。失误次数、结算界面将在后续事项中加入。
 """
 
 from __future__ import annotations
@@ -54,7 +54,9 @@ class Game:
             elif event.type == pygame.KEYDOWN:
                 self._handle_key(event.key)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self.board.handle_click(pygame.mouse.get_pos())
+                # 用事件自带坐标而不是 pygame.mouse.get_pos()，避免鼠标在
+                # 事件入队后又被移动而导致点击落到别的格子上。
+                self.board.handle_click(event.pos)
 
     def _handle_key(self, key: int) -> None:
         """处理按键：``Esc`` 退出，左右方向键用于开发期切换关卡。"""

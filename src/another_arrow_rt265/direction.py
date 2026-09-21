@@ -27,6 +27,16 @@ class Direction(Enum):
         """返回绘制时相对“向上”箭头的顺时针旋转角度（度）。"""
         return _ANGLES[self]
 
+    @property
+    def vector(self) -> tuple[float, float]:
+        """返回该方向在屏幕像素坐标下的单位向量 ``(dx, dy)``。
+
+        与 :attr:`delta` 的区别是分量顺序为 ``(x, y)`` 且为浮点数，
+        便于直接用于绘制与动画位移计算。
+        """
+        delta_row, delta_col = self.delta
+        return (float(delta_col), float(delta_row))
+
 
 # 屏幕坐标下 y 轴向下，因此“向下”对应行号增加。
 _DELTAS: Final[dict[Direction, tuple[int, int]]] = {
