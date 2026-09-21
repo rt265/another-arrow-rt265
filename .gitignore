@@ -2,6 +2,7 @@
 build/
 .trae/
 .vscode/
+.preview/
 docs/agents
 .pytest_cache/
 .ruff_cache/
