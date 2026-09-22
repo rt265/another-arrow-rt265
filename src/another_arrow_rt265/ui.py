@@ -162,8 +162,10 @@ _PAGE_TITLE_Y: Final[int] = 126
 _PAGE_SUBTITLE_Y: Final[int] = 194
 # 方向箭头装饰的中心（只出现在开始界面）。
 _PAGE_DECORATION_Y: Final[int] = 248
-# 主按钮行的中心：排在标题装饰与说明卡片之间。
-_PAGE_HERO_BUTTON_Y: Final[int] = 340
+# 主按钮行的中心：整页**竖直居中**（设计框的中线，720 / 2 = 360）。
+# 这一行上方只有标题与装饰、下方只有页脚，按钮落在中线上整页才立得住；
+# 顺带与说明卡片（起点 420）之间留出更松的一档间距。
+_PAGE_HERO_BUTTON_Y: Final[int] = config.WINDOW_HEIGHT // 2
 # 说明卡片的起点：有主按钮时排在按钮下方，否则直接从副标题底下开始。
 _PAGE_SECTIONS_TOP: Final[int] = 420
 _PAGE_SECTIONS_TOP_PLAIN: Final[int] = 272
@@ -247,7 +249,7 @@ class MenuButtonPlacement(Enum):
     """按钮在菜单页上的位置。"""
 
     HERO = "hero"
-    """主按钮：方向箭头装饰下方、开关行与说明卡片之前。"""
+    """主按钮：整页竖直居中的那一行（在标题装饰与说明卡片之间）。"""
 
     FOOTER = "footer"
     """页脚按钮：整页内容的最后一行，整排居中并贴住页面底部留白。"""
@@ -783,7 +785,7 @@ def _stack_toggles(
 
 
 def _hero_row_rects(count: int) -> tuple[pygame.Rect, ...]:
-    """返回主按钮行的区域（居中排在标题装饰下方，设计坐标）。"""
+    """返回主按钮行的区域（横向居中、整页竖直居中，设计坐标）。"""
     width, height = _HERO_BUTTON_SIZE
     left = _row_left(count, width)
     top = _PAGE_HERO_BUTTON_Y - height // 2

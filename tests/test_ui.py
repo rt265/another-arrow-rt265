@@ -195,14 +195,15 @@ def test_guide_toggle_content_fits_inside_the_pill() -> None:
     assert 2 * config.SWITCH_KNOB_RADIUS + 2 <= track.height, "滑块要放得进轨道"
 
 
-def test_start_button_is_centered_above_the_footer_button() -> None:
+def test_start_button_is_centred_on_the_page() -> None:
+    """首屏主按钮是整页的重心：横向居中 + **竖直居中**（压在窗口中线上）。"""
     button = ui.start_button_rect()
     footer = ui.about_button_rect()
 
     assert button.centerx == config.WINDOW_WIDTH // 2
+    assert button.centery == config.WINDOW_HEIGHT // 2
     assert 0 <= button.left and button.right <= config.WINDOW_WIDTH
-    # 主按钮位于画面中上部，且不压到页脚的“关于”。
-    assert button.centery < config.WINDOW_HEIGHT * 0.6
+    # 按钮在中线上，上方还有标题与装饰，下方不压到页脚的“关于”。
     assert button.bottom < footer.top
 
 
