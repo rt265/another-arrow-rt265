@@ -27,6 +27,11 @@
 按钮对应哪个动作），本模块只负责“接线”：把按钮的 ``action`` 名分发到
 :meth:`Game._run_action` 的动作表，并在按下 Enter / 空格时触发页面的默认按钮。
 **新增一个界面时，写一个 ``MenuPage``、加一个 ``Scene`` 成员、再往动作表里补一行即可。**
+
+**窗口可以自由缩放**（拖边、最大化）：几何按 :mod:`another_arrow_rt265.viewport` 把
+720×720 的设计尺寸等比映射到当前窗口并居中，文字与图形都是照着目标尺寸重画的；
+窗口尺寸变化由 :meth:`Game._sync_window_size` 每帧核对后接管——换视口、让会话把棋盘
+重新摆到新的可用区域，**关卡进度、失误、计时与教程进度都不受影响**。
 """
 
 from __future__ import annotations
@@ -35,7 +40,7 @@ from enum import Enum
 
 import pygame
 
-from another_arrow_rt265 import config, ui
+from another_arrow_rt265 import config, ui, viewport
 from another_arrow_rt265.session import GameStatus, Session
 
 
@@ -62,9 +67,9 @@ class Game:
             level_index: 起始关卡序号，越界时会自动取模。
         """
         pygame.init()
-        self.screen = pygame.display.set_mode(
-            (config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
-        )
+        # 窗口可以自由缩放（拖边、最大化）：界面几何全部按当前视口重算，
+        # 见 `_sync_window_size()` 与 `viewport` 模块。
+        self.screen = pygame.display.set_mode(config.WINDOW_SIZE, pygame.RESIZABLE)
         pygame.display.set_caption(config.WINDOW_TITLE)
         self.clock = pygame.time.Clock()
         self.running = True
@@ -73,16 +78,42 @@ class Game:
         # 而不是“默认替玩家把答案标出来”。它是窗口级的显示偏好，而不是关卡状态：
         # 存在这里就不会因为重开本关、进入下一关而被重置。
         self.show_guides = False
+        # 视口是窗口尺寸到“设计尺寸”的映射（等比 + 居中留白），界面与棋盘都读它；
+        # 窗口尺寸变化时由 `_sync_window_size()` 重建，会话则只换棋盘几何、不丢进度。
+        self.viewport = viewport.set_current(viewport.Viewport.fit(config.WINDOW_SIZE))
         self.session = Session(ui.board_area(), level_index=level_index)
 
     def run(self) -> None:
         """进入主循环，直到窗口被关闭。"""
         while self.running:
             dt = self.clock.tick(config.FPS) / 1000.0
+            self._sync_window_size()
             self._handle_events()
             self._update(dt)
             self._draw()
         pygame.quit()
+
+    def _sync_window_size(self) -> bool:
+        """按当前窗口尺寸刷新视口与会话，窗口没变时什么也不做。
+
+        每帧比一次窗口尺寸，而不是只听 ``VIDEORESIZE``：拖边、最大化、以及
+        系统改缩放比例都会改变窗口尺寸，从“当前尺寸”反推最稳，也不会因为事件
+        丢失或重复而算错。
+
+        Returns:
+            本次调用是否真的换了尺寸。
+        """
+        surface = pygame.display.get_surface()
+        if surface is None:  # pragma: no cover - 只会在窗口被销毁后发生
+            return False
+        self.screen = surface
+        if surface.get_size() == self.viewport.size:
+            return False
+
+        self.viewport = viewport.set_current(viewport.Viewport.fit(surface.get_size()))
+        # 只换棋盘几何：关卡、失误、计时与教程进度都不重置。
+        self.session.resize(ui.board_area())
+        return True
 
     def _update(self, dt: float) -> None:
         """推进当前画面，``dt`` 为上一帧耗时（秒）。
@@ -121,6 +152,10 @@ class Game:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
+            elif event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED):
+                # 尺寸从窗口现读（事件自带的 w/h 在部分平台上不可靠），
+                # 真正做事的是 `_sync_window_size()`。
+                self._sync_window_size()
             elif event.type == pygame.KEYDOWN:
                 self._handle_key(event.key)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:

@@ -12,6 +12,9 @@
 - **单关计时**：每关各有一个计时器，只在“还在解谜”时走字，并记住本关的最佳用时；
 - **新手教程**：第 1 关附带一段边玩边学的教程（见 :mod:`another_arrow_rt265.tutorial`），
   进度由本模块在点击与每帧刷新时推进，画什么则交给 ``ui``。
+
+窗口缩放只影响几何：:meth:`Session.resize` 让棋盘换到新的可用区域里重新摆一遍，
+规则状态（箭头、失误、计时、教程、结算）一律保留。
 """
 
 from __future__ import annotations
@@ -226,6 +229,15 @@ class Session:
     def restart_level(self) -> None:
         """让当前关卡恢复到初始状态（箭头布局与失误次数都会重置）。"""
         self._load(self.level_index)
+
+    def resize(self, area: pygame.Rect) -> None:
+        """跟随窗口尺寸变化：把棋盘换到新的可用区域里重新摆一遍。
+
+        只重算几何（格子尺寸与位置），**关卡进度全部保留**：箭头布局、失误次数、
+        本关用时、教程进度与结算状态都不受影响，因此玩家可以随时拖窗口。
+        """
+        self.area = area
+        self._board.reshape(area)
 
     def advance(self) -> None:
         """进入下一关；已经是最后一关时从头开始新的一轮。"""

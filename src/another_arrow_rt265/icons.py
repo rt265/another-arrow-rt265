@@ -5,22 +5,31 @@
 也能在任意尺寸下保持清晰，线宽与颜色还可以直接跟着所在按钮走——按钮悬停、
 主/次按钮配色变化时图标会一起变，不会出现“图标是位图、颜色对不上”的问题。
 
+画法上走 :mod:`another_arrow_rt265.sprites` 的超采样贴图：图形先画在 4 倍画布上
+再缩到目标尺寸，因此圆弧与斜边带过渡色，不再是阶梯（图标本来就是小尺寸图形，
+硬边在这儿最刺眼）。每张图标贴图按“图标 + 尺寸 + 颜色”缓存，稳定状态下每帧
+只是把贴图贴上去。
+
 约定：每个图标都画在以 ``center`` 为中心、边长为 ``size`` 的正方形内，
 内部坐标按 ``size`` 归一化，因此调用方只需要决定“图标画多大”。
 """
 
 from __future__ import annotations
 
+import functools
 import math
 from enum import Enum
 from typing import Final
 
 import pygame
 
-from another_arrow_rt265 import config
+from another_arrow_rt265 import config, sprites
 
 # 环形箭头的采样段数：段数越多弧越圆滑，24 段在按钮尺寸下已经看不出折线。
 _ARC_STEPS: Final[int] = 24
+
+# 图标贴图的缓存上限：尺寸（跟着窗口缩放）+ 颜色（按钮的几种配色）合起来条目有限。
+_CACHE_SIZE: Final[int] = 64
 
 
 class Icon(Enum):
@@ -48,6 +57,8 @@ def draw_icon(
 ) -> None:
     """把 ``icon`` 以 ``center`` 为中心画到 ``surface`` 上，占据边长 ``size`` 的正方形。
 
+    真正画的是 :func:`_sprite` 缓存的抗锯齿贴图，因此这个函数每帧只做一次 ``blit``。
+
     Args:
         surface: 绘制目标。
         icon: 要画的图标。
@@ -55,6 +66,37 @@ def draw_icon(
         size: 图标外接正方形的边长（像素），线宽会按它等比缩放。
         color: 图标颜色，通常取所在按钮的文字色。
     """
+    sprite = _sprite(icon, max(1, size), color)
+    surface.blit(sprite, sprite.get_rect(center=(round(center[0]), round(center[1]))))
+
+
+@functools.lru_cache(maxsize=_CACHE_SIZE)
+def _sprite(icon: Icon, size: int, color: config.Color) -> pygame.Surface:
+    """返回某个图标的抗锯齿贴图（边长 ``size``，按参数缓存）。
+
+    贴图是**共享的缓存对象**，调用方只读不要改写；形状沿用下面那组 ``_draw_*``，
+    只是把它们画在超采样画布上，坐标与线宽都乘上了超采样倍数。
+    """
+    return sprites.render(
+        (size, size),
+        lambda canvas, factor: _draw(
+            canvas,
+            icon,
+            (canvas.get_width() / 2, canvas.get_height() / 2),
+            size * factor,
+            color,
+        ),
+    )
+
+
+def _draw(
+    surface: pygame.Surface,
+    icon: Icon,
+    center: tuple[float, float],
+    size: float,
+    color: config.Color,
+) -> None:
+    """把图标画到 ``surface`` 上（这里是“形状本身”，尺寸单位由调用方决定）。"""
     if icon is Icon.HOME:
         _draw_home(surface, center, size, color)
     elif icon is Icon.RESTART:
@@ -65,13 +107,16 @@ def draw_icon(
         _draw_info(surface, center, size, color)
 
 
-def _stroke_width(size: int) -> int:
+def _stroke_width(size: float) -> int:
     """线宽随图标尺寸轻微变化，小图标不至于糊成一团。"""
     return max(2, round(size * 0.11))
 
 
 def _draw_home(
-    surface: pygame.Surface, center: tuple[int, int], size: int, color: config.Color
+    surface: pygame.Surface,
+    center: tuple[float, float],
+    size: float,
+    color: config.Color,
 ) -> None:
     """房子：一个三角屋顶 + 屋身轮廓 + 一扇门。"""
     center_x, center_y = center
@@ -122,7 +167,10 @@ def _draw_home(
 
 
 def _draw_restart(
-    surface: pygame.Surface, center: tuple[int, int], size: int, color: config.Color
+    surface: pygame.Surface,
+    center: tuple[float, float],
+    size: float,
+    color: config.Color,
 ) -> None:
     """环形箭头：留一个缺口，并在弧的末端接上箭头（顺时针方向）。"""
     center_x, center_y = center
@@ -164,7 +212,10 @@ def _draw_restart(
 
 
 def _draw_info(
-    surface: pygame.Surface, center: tuple[int, int], size: int, color: config.Color
+    surface: pygame.Surface,
+    center: tuple[float, float],
+    size: float,
+    color: config.Color,
 ) -> None:
     """信息：一个圆圈，圈内是“i”的点与竖杆。
 
@@ -191,7 +242,10 @@ def _draw_info(
 
 
 def _draw_next(
-    surface: pygame.Surface, center: tuple[int, int], size: int, color: config.Color
+    surface: pygame.Surface,
+    center: tuple[float, float],
+    size: float,
+    color: config.Color,
 ) -> None:
     """右箭头：一根短杆 + 一个三角箭头，与开始界面上的装饰箭头同款。"""
     center_x, center_y = center

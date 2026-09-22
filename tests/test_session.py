@@ -358,3 +358,34 @@ def test_switching_levels_resets_the_timer() -> None:
     session.update(0.2)
     session.load_level(0)
     assert session.elapsed == 0.0
+
+
+# ---------------------------------------------------------------- 窗口缩放
+
+
+def test_resize_keeps_the_whole_level_progress() -> None:
+    """窗口缩放只换棋盘几何：失误、箭头、计时与进行状态一律保留。"""
+    session = Session(AREA, levels=(CROSS_LEVEL,), max_mistakes=3)
+    assert _click(session, _arrow(session, 0, 1)) is ClickResult.BLOCKED
+    session.update(2.0)
+
+    area = AREA.inflate(-200, -200)
+    session.resize(area)
+
+    assert session.area == area
+    assert session.board.rect.center == area.center
+    assert session.mistakes_left == 2
+    assert session.arrows_left == _count_arrows(CROSS_LEVEL)
+    assert session.elapsed == pytest.approx(2.0)
+    assert session.status is GameStatus.PLAYING
+
+
+def test_resize_does_not_end_a_cleared_level() -> None:
+    """结算界面弹着的时候缩放窗口，通关状态与成绩都不该丢。"""
+    session = Session(AREA, levels=(SOLO_LEVEL,))
+    _clear_solo_level(session, 1.5)
+
+    session.resize(AREA.inflate(-200, -200))
+
+    assert session.status is GameStatus.LEVEL_CLEARED
+    assert session.best_time == pytest.approx(1.5)

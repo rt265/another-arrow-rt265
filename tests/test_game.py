@@ -9,7 +9,7 @@ from __future__ import annotations
 import pygame
 import pytest
 
-from another_arrow_rt265 import config, ui
+from another_arrow_rt265 import config, ui, viewport
 from another_arrow_rt265.board import Board, ClickResult
 from another_arrow_rt265.game import Game, Scene
 from another_arrow_rt265.levels import LEVELS
@@ -545,3 +545,78 @@ def test_draw_renders_a_frame_with_the_guides_switched_on(game: Game) -> None:
     game.session.status = GameStatus.LEVEL_CLEARED
     game._draw()
     assert game.show_guides is True
+
+
+# ---------------------------------------------------------------- 窗口缩放
+
+
+def _resize_the_window(game: Game, size: tuple[int, int]) -> None:
+    """把窗口改成 ``size`` 并让游戏跟上（dummy 驱动下 set_mode 就够了）。"""
+    pygame.display.set_mode(size, pygame.RESIZABLE)
+    assert game._sync_window_size() is True
+
+
+def test_resizing_the_window_keeps_the_level_progress(game: Game) -> None:
+    """拖窗口只换几何：关卡、失误、用时与进行状态都不受影响。"""
+    session = game.session
+    _post_click(game, session.board.cell_rect(0, 1).center)
+    left = session.arrows_left
+    cell_before = session.board.cell_size
+    session.update(1.5)
+
+    _resize_the_window(game, (1080, 1080))
+
+    assert game.viewport.scale == pytest.approx(1.5)
+    assert session.board.cell_size > cell_before
+    assert session.arrows_left == left
+    assert session.mistakes_left == session.max_mistakes
+    assert session.elapsed == pytest.approx(1.5)
+    assert session.status is GameStatus.PLAYING
+    assert game.scene is Scene.PLAYING
+
+
+def test_clicking_still_works_after_the_window_grows(game: Game) -> None:
+    """缩放之后命中判定跟着换到新几何上：点格子中心仍然点得中。"""
+    _resize_the_window(game, (1080, 1080))
+    session = game.session
+    before = session.arrows_left
+    free = next(
+        arrow for arrow in session.board.arrows if session.board.is_path_clear(arrow)
+    )
+
+    _post_click(game, session.board.cell_rect(free.row, free.col).center)
+
+    assert session.arrows_left == before - 1
+
+
+def test_a_resize_event_makes_the_game_follow_the_window(game: Game) -> None:
+    """真实缩放进来的事件（拖边 / 最大化）也要走同一条路。"""
+    pygame.display.set_mode((1008, 1008), pygame.RESIZABLE)
+    pygame.event.post(
+        pygame.event.Event(
+            pygame.VIDEORESIZE, {"size": (1008, 1008), "w": 1008, "h": 1008}
+        )
+    )
+
+    game._handle_events()
+
+    assert game.viewport.scale == viewport.Viewport.fit((1008, 1008)).scale
+    assert game.session.board.rect.center == ui.board_area().center
+
+
+def test_the_same_window_size_does_not_restart_the_board(game: Game) -> None:
+    """窗口尺寸没变时什么也不做（每帧都会核对一次，不能顺手把棋盘重建一遍）。"""
+    board = game.session.board
+    assert game._sync_window_size() is False
+    assert game.session.board is board
+
+
+def test_the_tutorial_bar_follows_the_window(game: Game) -> None:
+    """第 1 关的教程提示条按同一个视口缩放，仍然留在窗口内。"""
+    assert game.session.tutorial is not None
+
+    _resize_the_window(game, (1080, 1080))
+
+    panel = ui.tutorial_panel_rect()
+    assert game.viewport.rect(0, 0, *config.WINDOW_SIZE).contains(panel)
+    assert game.session.tutorial is not None

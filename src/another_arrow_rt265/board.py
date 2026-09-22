@@ -14,11 +14,23 @@
 每个箭头都有自己的主题色（见 :mod:`another_arrow_rt265.palette`）：颜色由格子的
 位置决定，一关之内不会变；选中与碰撞状态只在主题色上提亮 / 染色，不换颜色身份。
 
+棋盘上所有带弧线或斜边的图形都走 :mod:`another_arrow_rt265.sprites` 的超采样贴图
+（底板与格子是圆角矩形，箭头是“圆片 + 描边 + 多边形”的一张合成贴图），因此边缘
+不再有阶梯；只有轴对齐的虚线仍然直接画——那本来就没有锯齿。箭头贴图按
+“格子尺寸 + 主题色 + 状态 + 朝向”缓存，选中环 / 碰撞环与火花这类每帧都在动的
+部分才现画。
+
 动画状态统一由 :meth:`Board.update` 推进，便于在无窗口环境下用固定 ``dt`` 测试。
+
+棋盘上的长度常量（格子间隙、圆角、线宽、辅助线的虚线长短……）都是**设计尺寸**下的值，
+绘制时按当前视口换算（见 :mod:`another_arrow_rt265.viewport`），因此窗口放大后
+格子、圆片与线宽一起等比变大，而不是把原画面拉大。窗口尺寸变化时由
+:meth:`Board.reshape` 就地重算格子尺寸，关卡进度不受影响。
 """
 
 from __future__ import annotations
 
+import functools
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -27,7 +39,7 @@ from typing import Final
 
 import pygame
 
-from another_arrow_rt265 import config, palette
+from another_arrow_rt265 import config, palette, sprites, viewport
 from another_arrow_rt265.direction import Direction, from_symbol
 from another_arrow_rt265.levels import Level
 
@@ -41,6 +53,12 @@ _ARROW_SHAPE: Final[tuple[tuple[float, float], ...]] = (
     (-0.13, -0.06),
     (-0.34, -0.06),
 )
+
+# 箭头圆片的半径相对格子内边宽的比例；圆片、辅助线起点与挡路提示都按它对齐。
+_CHIP_RADIUS_RATIO: Final[float] = 0.44
+
+# 箭头贴图的缓存上限：格子尺寸（跟着窗口缩放）+ 主题色 + 状态 + 朝向，条目有限。
+_ARROW_SPRITE_CACHE: Final[int] = 192
 
 _EMPTY_CELL: Final[str] = "."
 
@@ -149,10 +167,24 @@ class Board:
         self._cells: list[list[Arrow | None]] = _parse_level(level)
         self.rows: int = len(self._cells)
         self.cols: int = len(self._cells[0])
+        self._layout(area)
+        self.selected: Arrow | None = None
+        self._blocked_flash: Arrow | None = None
+        self._flash_remaining: float = 0.0
+        self._flying: list[FlyingArrow] = []
+        self._elapsed: float = 0.0
+
+    def _layout(self, area: pygame.Rect) -> None:
+        """按可用区域重算格子尺寸与棋盘位置（棋盘在 ``area`` 里居中）。
+
+        格子尺寸受两个上限约束：``area`` 能放下多少，以及设计尺寸下的
+        ``config.MAX_CELL_SIZE``。后一个上限跟着视口放大，所以窗口变大时格子确实
+        会变大，不会“窗口变大了、棋盘还是原来那么大”。
+        """
         self.cell_size: int = min(
             area.width // self.cols,
             area.height // self.rows,
-            config.MAX_CELL_SIZE,
+            viewport.s(config.MAX_CELL_SIZE),
         )
         self.rect: pygame.Rect = pygame.Rect(
             0,
@@ -161,11 +193,22 @@ class Board:
             self.rows * self.cell_size,
         )
         self.rect.center = area.center
-        self.selected: Arrow | None = None
-        self._blocked_flash: Arrow | None = None
-        self._flash_remaining: float = 0.0
-        self._flying: list[FlyingArrow] = []
-        self._elapsed: float = 0.0
+
+    def reshape(self, area: pygame.Rect) -> None:
+        """按新的可用区域重新摆放棋盘（窗口尺寸变化时由 ``Session.resize`` 调用）。
+
+        只重算格子尺寸与位置，**不改动任何规则状态**：箭头布局、选中、碰撞提示与
+        计时都保持原样，因此拖拽窗口不会打断玩家正在解的这一关。飞出动画保存的是
+        像素坐标，缩放后不再成立，直接放弃（它只持续 0.32 秒，看不出中断）。
+        """
+        self._layout(area)
+        self._flying.clear()
+
+    @property
+    def panel_rect(self) -> pygame.Rect:
+        """棋盘底板的屏幕区域（格子外再留一圈间隙）。"""
+        gap = viewport.s(config.CELL_GAP)
+        return self.rect.inflate(2 * gap, 2 * gap)
 
     def __iter__(self) -> Iterator[Arrow]:
         """按行优先顺序遍历棋盘上仍在场的箭头。"""
@@ -241,10 +284,11 @@ class Board:
 
     def cell_rect(self, row: int, col: int) -> pygame.Rect:
         """返回某个格子在屏幕上的矩形区域（已扣除格子间隙）。"""
-        inner_size = self.cell_size - 2 * config.CELL_GAP
+        gap = viewport.s(config.CELL_GAP)
+        inner_size = self.cell_size - 2 * gap
         return pygame.Rect(
-            self.rect.left + col * self.cell_size + config.CELL_GAP,
-            self.rect.top + row * self.cell_size + config.CELL_GAP,
+            self.rect.left + col * self.cell_size + gap,
+            self.rect.top + row * self.cell_size + gap,
             inner_size,
             inner_size,
         )
@@ -299,24 +343,23 @@ class Board:
         与绘制、点击判定读的是同一份坐标；线本身只是视觉提示，不改变任何状态。
         """
         cell = self.cell_rect(arrow.row, arrow.col)
-        radius = cell.width * 0.44
+        radius = cell.width * _CHIP_RADIUS_RATIO
+        margin = viewport.s(config.GUIDE_LINE_MARGIN)
         unit_x, unit_y = arrow.direction.vector
         center = (float(cell.centerx), float(cell.centery))
         start = _point_towards(
             center,
             (center[0] + unit_x, center[1] + unit_y),
-            radius + config.GUIDE_LINE_MARGIN,
+            radius + margin,
         )
 
         blocker = self.blocking_arrow(arrow)
         if blocker is not None:
             target = self.cell_rect(blocker.row, blocker.col)
-            end = _point_towards(
-                target.center, center, radius + config.GUIDE_LINE_MARGIN
-            )
+            end = _point_towards(target.center, center, radius + margin)
             return GuideLine(arrow, start, end, blocker)
 
-        panel = self.rect.inflate(2 * config.CELL_GAP, 2 * config.CELL_GAP)
+        panel = self.panel_rect
         if unit_x > 0:
             distance = panel.right - center[0]
         elif unit_x < 0:
@@ -395,7 +438,7 @@ class Board:
 
     def _fly_out_distance(self, arrow: Arrow, cell: pygame.Rect) -> float:
         """计算箭头从 ``cell`` 起步、完全飞出棋盘可见区域所需的像素距离。"""
-        panel = self.rect.inflate(2 * config.CELL_GAP, 2 * config.CELL_GAP)
+        panel = self.panel_rect
         unit_x, unit_y = arrow.direction.vector
         if unit_x > 0:
             return panel.right + cell.width - cell.centerx
@@ -435,26 +478,25 @@ class Board:
             show_guides: 辅助线开关（右下角开关 / ``G`` 键），默认关闭。
                 关着时**一条线都不画**，打开后所有箭头各画一条。
         """
-        panel = self.rect.inflate(2 * config.CELL_GAP, 2 * config.CELL_GAP)
-        pygame.draw.rect(
-            surface, config.COLOR_BOARD, panel, border_radius=config.BOARD_RADIUS
+        panel = self.panel_rect
+        sprites.blit_round_rect(
+            surface, panel, viewport.s(config.BOARD_RADIUS), config.COLOR_BOARD
         )
-        pygame.draw.rect(
+        # 底板描边：向外侧收的圆角描边同样走超采样贴图，四角不再是阶梯。
+        sprites.blit_round_rect(
             surface,
-            config.COLOR_BOARD_BORDER,
             panel,
-            width=2,
-            border_radius=config.BOARD_RADIUS,
+            viewport.s(config.BOARD_RADIUS),
+            config.COLOR_BOARD_BORDER,
+            viewport.s(2),
         )
 
+        # 所有格子共用同一张圆角贴图（尺寸与配色都一样），每帧只是重复 blit。
+        cell_radius = viewport.s(config.CELL_RADIUS)
         for row in range(self.rows):
             for col in range(self.cols):
-                cell = self.cell_rect(row, col)
-                pygame.draw.rect(
-                    surface,
-                    config.COLOR_CELL,
-                    cell,
-                    border_radius=config.CELL_RADIUS,
+                sprites.blit_round_rect(
+                    surface, self.cell_rect(row, col), cell_radius, config.COLOR_CELL
                 )
 
         self._draw_guides(surface, mouse, show_guides)
@@ -469,57 +511,52 @@ class Board:
     def _draw_arrow(self, surface: pygame.Surface, arrow: Arrow) -> None:
         """绘制棋盘上的单个箭头。
 
-        - 底色是压暗过的主题色，外面再勾一圈提亮的主题色；
+        - 圆片（底色 + 描边）与箭头图形是**一张缓存贴图**，见 :func:`_arrow_sprite`；
         - 被选中的箭头向白色提亮，并带一圈呼吸式中性描边；
         - 刚刚撞到其他箭头的箭头染向警示色，整体沿前进方向抖动，
           外圈是向外扩散的红环，前方另有三道火花线。
+
+        只有随动画每帧变化的部分（选中环 / 碰撞环 / 火花）才现画，其余部分稳定状态
+        下每帧只是一次 ``blit``。
         """
         cell = self.cell_rect(arrow.row, arrow.col)
         is_selected = arrow == self.selected
         is_blocked = arrow == self._blocked_flash
         theme = self.arrow_color(arrow)
+        radius = cell.width * _CHIP_RADIUS_RATIO
 
-        chip_color = palette.chip_color(theme, selected=is_selected, blocked=is_blocked)
-        arrow_color = palette.glyph_color(
-            theme, selected=is_selected, blocked=is_blocked
+        sprite = _arrow_sprite(
+            cell.width,
+            arrow.direction,
+            palette.chip_color(theme, selected=is_selected, blocked=is_blocked),
+            palette.chip_border_color(theme, selected=is_selected, blocked=is_blocked),
+            palette.glyph_color(theme, selected=is_selected, blocked=is_blocked),
+            viewport.s(2),
         )
-
         offset_x, offset_y = self.shake_offset if is_blocked else (0.0, 0.0)
         center = (cell.centerx + offset_x, cell.centery + offset_y)
-        radius = cell.width * 0.44
-
-        pygame.draw.circle(surface, chip_color, center, round(radius))
-        pygame.draw.circle(
-            surface,
-            palette.chip_border_color(theme, selected=is_selected, blocked=is_blocked),
-            center,
-            round(radius),
-            width=2,
+        surface.blit(
+            sprite, sprite.get_rect(center=(round(center[0]), round(center[1])))
         )
+
         if is_blocked:
-            pygame.draw.circle(
+            sprites.blit_circle(
                 surface,
-                config.COLOR_BLOCKED_RING,
                 center,
-                round(radius * (1.0 + 0.35 * self.flash_progress)),
-                width=3,
+                radius * (1.0 + 0.35 * self.flash_progress),
+                config.COLOR_BLOCKED_RING,
+                viewport.s(3),
             )
         elif is_selected:
             pulse = math.sin(_TWO_PI * self._elapsed / config.SELECTION_PULSE_SECONDS)
             scale = config.SELECTION_RING_SCALE + config.SELECTION_PULSE_RATIO * pulse
-            pygame.draw.circle(
+            sprites.blit_circle(
                 surface,
-                config.COLOR_SELECTION_RING,
                 center,
-                round(radius * scale),
-                width=3,
+                radius * scale,
+                config.COLOR_SELECTION_RING,
+                viewport.s(3),
             )
-
-        pygame.draw.polygon(
-            surface,
-            arrow_color,
-            _arrow_points(center, cell.width, arrow.direction),
-        )
 
         if is_blocked:
             _draw_impact_sparks(
@@ -554,7 +591,7 @@ class Board:
         颜色只有两种：畅通用绿色、被挡用红色；``dim`` 是“全部显示”里的淡色版。
         长度不足一个虚线段时直接跳过，免得在贴边的短线上堆出一个小墨点。
         """
-        if math.dist(line.start, line.end) < config.GUIDE_LINE_DASH:
+        if math.dist(line.start, line.end) < viewport.s(config.GUIDE_LINE_DASH):
             return
         color = (
             config.GUIDE_LINE_COLOR_BLOCKED
@@ -575,24 +612,24 @@ class Board:
         _draw_guide_cap(surface, line, color)
 
     def _draw_flying_arrow(self, surface: pygame.Surface, flying: FlyingArrow) -> None:
-        """绘制飞出动画：位置由 :class:`FlyingArrow` 给出，越接近飞出越透明。"""
-        size = self.cell_size - 2 * config.CELL_GAP
-        layer = pygame.Surface((size, size), pygame.SRCALPHA)
-        center = (size / 2.0, size / 2.0)
-        radius = round(size * 0.44)
-        theme = self.arrow_color(flying.arrow)
+        """绘制飞出动画：位置由 :class:`FlyingArrow` 给出，越接近飞出越透明。
 
-        pygame.draw.circle(layer, palette.chip_color(theme), center, radius)
-        pygame.draw.circle(
-            layer, palette.chip_border_color(theme), center, radius, width=2
-        )
-        pygame.draw.polygon(
-            layer,
+        画的还是 :func:`_arrow_sprite` 那张贴图（常态配色），只是每帧复制一份调低
+        整体透明度——缓存贴图不能就地改，否则会把棋盘上的箭头一起改透明。
+        """
+        size = self.cell_size - 2 * viewport.s(config.CELL_GAP)
+        theme = self.arrow_color(flying.arrow)
+        sprite = _arrow_sprite(
+            size,
+            flying.arrow.direction,
+            palette.chip_color(theme),
+            palette.chip_border_color(theme),
             palette.glyph_color(theme),
-            _arrow_points(center, size, flying.arrow.direction),
+            viewport.s(2),
         )
 
         # 尾段快速淡出：前 60% 的行程几乎不透明，最后 40% 渐隐到全透明。
+        layer = sprite.copy()
         layer.set_alpha(round(255 * (1.0 - flying.progress**3)))
         position = (round(flying.position[0]), round(flying.position[1]))
         surface.blit(layer, layer.get_rect(center=position))
@@ -615,15 +652,49 @@ class Board:
         )
         cell = self.cell_rect(blocked.row, blocked.col)
         target = self.cell_rect(blocker.row, blocker.col)
-        radius = cell.width * 0.44
+        radius = cell.width * _CHIP_RADIUS_RATIO
+        near = viewport.s(4.0)
+        far = viewport.s(6.0)
 
         _draw_dashed_line(
             surface,
-            _point_towards(cell.center, target.center, radius + 4.0),
-            _point_towards(target.center, cell.center, radius + 6.0),
+            _point_towards(cell.center, target.center, radius + near),
+            _point_towards(target.center, cell.center, radius + far),
             color,
+            smooth=True,
         )
-        pygame.draw.circle(surface, color, target.center, round(radius + 4.0), width=3)
+        sprites.blit_circle(surface, target.center, radius + near, color, viewport.s(3))
+
+
+@functools.lru_cache(maxsize=_ARROW_SPRITE_CACHE)
+def _arrow_sprite(
+    cell_size: int,
+    direction: Direction,
+    chip: config.Color,
+    border: config.Color,
+    glyph: config.Color,
+    border_width: int,
+) -> pygame.Surface:
+    """返回一个箭头的抗锯齿贴图：圆片底色 + 圆片描边 + 箭头图形。
+
+    这三件东西在棋盘上会反复出现（同一尺寸 + 同一主题色 + 同一状态 + 同一朝向的
+    箭头长得完全一样），因此按绘制参数缓存；而选中环、碰撞环与火花每帧都在动，
+    不在这里画。贴图是**共享的缓存对象**，需要改透明度（飞出动画）就自己复制一份。
+    """
+    radius = round(cell_size * _CHIP_RADIUS_RATIO)
+    span = 2 * radius + 3
+
+    def paint(canvas: pygame.Surface, factor: int) -> None:
+        center = (canvas.get_width() / 2, canvas.get_height() / 2)
+        pygame.draw.circle(canvas, chip, center, radius * factor)
+        pygame.draw.circle(
+            canvas, border, center, radius * factor, width=border_width * factor
+        )
+        pygame.draw.polygon(
+            canvas, glyph, _arrow_points(center, cell_size * factor, direction)
+        )
+
+    return sprites.render((span, span), paint)
 
 
 def _parse_level(level: Level) -> list[list[Arrow | None]]:
@@ -699,7 +770,7 @@ def _draw_impact_sparks(
     """在被阻挡箭头的前方画出三道向外扩散的火花线。
 
     火花长度与偏移都随 ``progress``（0.0 → 1.0）收缩到贴住箭头边缘，
-    与碰撞提示同时结束，不需要单独的状态。
+    与碰撞提示同时结束，不需要单独的状态。三道火花都是斜线，因此用抗锯齿的折线画。
     """
     envelope = 1.0 - progress
     if envelope <= 0.0:
@@ -707,18 +778,19 @@ def _draw_impact_sparks(
 
     unit_x, unit_y = direction.vector
     base_angle = math.atan2(unit_y, unit_x)
-    radius = cell_size * 0.44
+    radius = cell_size * _CHIP_RADIUS_RATIO
+    width = viewport.s(2)
     for offset_angle in (-0.5, 0.0, 0.5):
         angle = base_angle + offset_angle
         cos_angle, sin_angle = math.cos(angle), math.sin(angle)
         inner = radius * 1.02
         outer = inner + cell_size * (0.06 + 0.14 * envelope)
-        pygame.draw.line(
+        pygame.draw.aaline(
             surface,
             config.COLOR_BLOCKED_SPARK,
             (center[0] + cos_angle * inner, center[1] + sin_angle * inner),
             (center[0] + cos_angle * outer, center[1] + sin_angle * outer),
-            width=2,
+            width,
         )
 
 
@@ -732,30 +804,34 @@ def _draw_guide_cap(
     畅通时是一个越过棋盘边缘、指向线外的小箭头（“这一箭从这里飞出去”）；
     被挡住时是一段垂直于前进方向的短横杠（“到此为止，前面有东西”）。
     标记的朝向完全由箭头的方向决定，所以辅助线本身就说明了“往哪走”。
+
+    两个张开的箭羽是斜线，用抗锯齿折线画；被挡时的横杠与前进方向垂直、
+    因此总是水平或垂直的，直接画就好（轴对齐的线本来就没有锯齿）。
     """
     unit_x, unit_y = line.arrow.direction.vector
     perpendicular_x, perpendicular_y = -unit_y, unit_x
     end_x, end_y = line.end
+    width = viewport.s(config.GUIDE_LINE_WIDTH)
 
     if line.blocked:
-        half = config.GUIDE_LINE_CAP / 2.0
+        half = viewport.s(config.GUIDE_LINE_CAP) / 2.0
         pygame.draw.line(
             surface,
             color,
             (end_x - perpendicular_x * half, end_y - perpendicular_y * half),
             (end_x + perpendicular_x * half, end_y + perpendicular_y * half),
-            width=config.GUIDE_LINE_WIDTH + 1,
+            width=width + 1,
         )
         return
 
-    head = config.GUIDE_LINE_HEAD
+    head = viewport.s(config.GUIDE_LINE_HEAD)
     tip = (end_x + unit_x * head, end_y + unit_y * head)
     for sign in (1.0, -1.0):
         barb = (
             tip[0] - unit_x * head + perpendicular_x * head * 0.55 * sign,
             tip[1] - unit_y * head + perpendicular_y * head * 0.55 * sign,
         )
-        pygame.draw.line(surface, color, tip, barb, width=config.GUIDE_LINE_WIDTH)
+        pygame.draw.aaline(surface, color, tip, barb, width)
 
 
 def _draw_dashed_line(
@@ -763,11 +839,24 @@ def _draw_dashed_line(
     start: tuple[float, float],
     end: tuple[float, float],
     color: config.Color,
-    dash: float = 7.0,
-    gap: float = 5.0,
-    width: int = 2,
+    dash: float | None = None,
+    gap: float | None = None,
+    width: int | None = None,
+    *,
+    smooth: bool = False,
 ) -> None:
-    """在两点之间画一条虚线（纯几何实现，不依赖字体或抗锯齿）。"""
+    """在两点之间画一条虚线（纯几何实现，不依赖字体）。
+
+    ``start`` / ``end`` 是屏幕坐标；``dash`` / ``gap`` / ``width`` 是**设计长度**，
+    省略时取 ``config`` 里的值，二者都在这里按当前视口换算。
+
+    ``smooth`` 为真时每一段用抗锯齿折线画。辅助线**不开**这一档：它们是轴对齐的
+    细线（水平 / 垂直的线本来就没有锯齿），保持硬边反而更利落，也让测试能按精确
+    颜色数像素；斜向的“被谁挡住”提示线则用得上抗锯齿。
+    """
+    dash = viewport.s(config.GUIDE_LINE_DASH if dash is None else dash)
+    gap = viewport.s(config.GUIDE_LINE_GAP if gap is None else gap)
+    width = viewport.s(config.GUIDE_LINE_WIDTH if width is None else width)
     delta_x, delta_y = end[0] - start[0], end[1] - start[1]
     length = math.hypot(delta_x, delta_y)
     if length <= 0.0:
@@ -778,13 +867,15 @@ def _draw_dashed_line(
     travelled = 0.0
     while travelled < length:
         segment_end = min(travelled + dash, length)
-        pygame.draw.line(
-            surface,
-            color,
-            (start[0] + unit_x * travelled, start[1] + unit_y * travelled),
-            (start[0] + unit_x * segment_end, start[1] + unit_y * segment_end),
-            width=width,
+        segment_start = (start[0] + unit_x * travelled, start[1] + unit_y * travelled)
+        segment_stop = (
+            start[0] + unit_x * segment_end,
+            start[1] + unit_y * segment_end,
         )
+        if smooth:
+            pygame.draw.aaline(surface, color, segment_start, segment_stop, width)
+        else:
+            pygame.draw.line(surface, color, segment_start, segment_stop, width=width)
         travelled += step
 
 

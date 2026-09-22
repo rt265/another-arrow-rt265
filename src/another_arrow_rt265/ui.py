@@ -5,6 +5,11 @@
 :func:`overlay_button_rect` 与 :func:`overlay_home_button_rect` 暴露给
 :class:`~another_arrow_rt265.game.Game` 做命中判定，因此以后调排版只需要改这一个文件。
 
+**布局常量一律按设计尺寸（720×720）写成绝对值**，再由 :mod:`another_arrow_rt265.viewport`
+换算到当前窗口：几何函数（:func:`board_area`、:func:`menu_layout` …）**返回屏幕坐标**；
+绘制里遇到设计长度（半径、留白、行距、字号……）时用 :func:`another_arrow_rt265.viewport.s`
+现算，而 `rect.height // 2` 这类由矩形派生的值本身就是像素，不要再换算一次。
+
 窗口一共有四类画面：
 
 - 菜单页：大标题 + 副标题 +（可选）方向箭头装饰 +（可选）主按钮 + 若干说明卡片
@@ -25,6 +30,11 @@
 组件的视觉效果统一由 :func:`_draw_panel` / :func:`_draw_primary_button` /
 :func:`_draw_secondary_button` 提供：圆角渐变底板 + 描边 + 柔和投影，配色取自
 ``config`` 的“界面”一节；按钮上的小图标来自 :mod:`another_arrow_rt265.icons`。
+
+带弧线与斜边的图形（圆角面板与按钮、圆点、徽章、装饰箭头）都走
+:mod:`another_arrow_rt265.sprites` 的超采样贴图：先在 4 倍画布上画、再缩回目标尺寸，
+边缘因此带过渡色。``pygame.draw`` 的直接调用只剩下两类：轴对齐的线（分隔线——
+本来就没有锯齿）与渐变、背景这种整屏填色。
 """
 
 from __future__ import annotations
@@ -37,7 +47,7 @@ from typing import Final
 
 import pygame
 
-from another_arrow_rt265 import config, icons, resources, tutorial
+from another_arrow_rt265 import config, icons, resources, sprites, tutorial, viewport
 from another_arrow_rt265.direction import Direction
 from another_arrow_rt265.session import GameStatus, Session
 
@@ -70,8 +80,12 @@ class _TextStyle:
     weight: resources.FontWeight = resources.DEFAULT_WEIGHT
 
     def font(self) -> pygame.font.Font:
-        """返回这个样式对应的字体对象（按“字号 + 字重”缓存，见 :func:`_font`）。"""
-        return _font(self.size, self.weight)
+        """返回这个样式对应的字体对象（按“实际字号 + 字重”缓存，见 :func:`_font`）。
+
+        这里的 ``size`` 是**设计字号**：实际字号要乘上当前视口，因此窗口放大后文字是
+        照着更大的字号重新渲染的，而不是把原来的字位图拉大（后者一定会糊）。
+        """
+        return _font(viewport.s(self.size), self.weight)
 
 
 # 界面文字的字号与字重一览。共用同一套字重的文字写在同一行，读的时候按“角色”找：
@@ -190,6 +204,9 @@ _TUTORIAL_BLOCKER_WIDTH: Final[int] = 2
 # 组件投影 / 光晕的默认扩散半径。
 _SHADOW_SPREAD: Final[int] = 8
 _GLOW_SPREAD: Final[int] = 7
+
+# 小贴图的缓存上限：装饰箭头与结算徽章的绘制参数（尺寸 + 颜色 + 状态）就那么几种。
+_SMALL_SPRITE_CACHE: Final[int] = 64
 
 
 # ---------------------------------------------------------------- 菜单页描述
@@ -337,7 +354,7 @@ def _weight_fallbacks(
     return (weight, resources.DEFAULT_WEIGHT)
 
 
-@functools.cache
+@functools.lru_cache(maxsize=96)
 def _font(
     size: int, weight: resources.FontWeight = resources.DEFAULT_WEIGHT
 ) -> pygame.font.Font:
@@ -347,6 +364,9 @@ def _font(
     :func:`resources.font_path`）：这样界面文字在任何机器上都长一个样，不依赖别人装没装
     中文字体。这个字重的文件缺失时先退回常规字重，再退回系统的中文字体；再没有就退回
     pygame 内置字体，此时中文会显示为占位方块，但界面结构依旧完整。
+
+    缓存有上限（而不是 ``functools.cache``）：窗口自由缩放后字号是连续变化的，
+    无上限的缓存会随着拖拽一路长下去。
     """
     if not pygame.font.get_init():
         pygame.font.init()
@@ -447,7 +467,8 @@ def _gradient(
     """生成一张带圆角遮罩的竖直渐变贴图。
 
     做法是先画满渐变，再用一张“圆角矩形”蒙版按 ``BLEND_RGBA_MULT`` 抠掉四角，
-    于是圆角外侧的像素 alpha 变成 0，贴到任何背景上都不会露出直角。
+    于是圆角外侧的像素 alpha 变成 0，贴到任何背景上都不会露出直角。蒙版来自
+    :func:`another_arrow_rt265.sprites.rounded_mask`，四角带抗锯齿的过渡色。
     """
     layer = pygame.Surface(size, pygame.SRCALPHA)
     last_row = max(1, size[1] - 1)
@@ -455,11 +476,11 @@ def _gradient(
         pygame.draw.line(layer, _mix(top, bottom, y / last_row), (0, y), (size[0], y))
 
     if radius > 0:
-        mask = pygame.Surface(size, pygame.SRCALPHA)
-        pygame.draw.rect(
-            mask, (255, 255, 255, 255), mask.get_rect(), border_radius=radius
+        layer.blit(
+            sprites.rounded_mask(size, radius),
+            (0, 0),
+            special_flags=pygame.BLEND_RGBA_MULT,
         )
-        layer.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
     return layer
 
 
@@ -467,13 +488,19 @@ def _draw_shadow(
     surface: pygame.Surface,
     rect: pygame.Rect,
     radius: int,
-    spread: int = _SHADOW_SPREAD,
+    spread: int | None = None,
     alpha: int = 110,
 ) -> None:
     """在 ``rect`` 下方画一圈柔和投影，让组件从背景里“浮”起来。
 
     由外向内叠几层同心圆角矩形，外层几乎透明、内层最深，近似出模糊的渐变。
+    每一层都走抗锯齿的圆角贴图，因此四角与描边一样干净。
+
+    ``radius`` 由调用方按屏幕尺寸给出（通常来自 ``rect``）；``spread`` 省略时取
+    ``config`` 里的设计值并按当前视口换算。
     """
+    if spread is None:
+        spread = viewport.s(_SHADOW_SPREAD)
     layer = pygame.Surface(
         (rect.width + 2 * spread, rect.height + 2 * spread), pygame.SRCALPHA
     )
@@ -481,16 +508,16 @@ def _draw_shadow(
     for step in range(rings, 0, -1):
         grow = spread * step / rings
         shade = round(alpha * (1.0 - step / rings) ** 0.6)
-        pygame.draw.rect(
+        sprites.blit_round_rect(
             layer,
-            (*config.COLOR_SHADOW, shade),
             pygame.Rect(
                 spread - grow,
-                spread - grow + 3,
+                spread - grow + viewport.s(3),
                 rect.width + 2 * grow,
                 rect.height + 2 * grow,
             ),
-            border_radius=round(radius + grow),
+            radius + grow,
+            (*config.COLOR_SHADOW, shade),
         )
     surface.blit(layer, (rect.x - spread, rect.y - spread))
 
@@ -500,26 +527,33 @@ def _draw_glow(
     rect: pygame.Rect,
     color: config.Color,
     radius: int,
-    spread: int = _GLOW_SPREAD,
+    spread: int | None = None,
     alpha: int = 120,
 ) -> None:
-    """在组件外侧画一圈强调色光晕（主按钮的悬停态使用）。"""
+    """在组件外侧画一圈强调色光晕（主按钮的悬停态使用）。
+
+    ``radius`` 是屏幕尺寸；``spread`` 省略时取 ``config`` 里的设计值并按当前视口换算。
+    光晕是一组同心圆角描边，同样走抗锯齿贴图。
+    """
+    if spread is None:
+        spread = viewport.s(_GLOW_SPREAD)
     layer = pygame.Surface(
         (rect.width + 2 * spread, rect.height + 2 * spread), pygame.SRCALPHA
     )
+    stroke = viewport.s(2)
     for step in range(spread, 0, -2):
         shade = round(alpha * (1.0 - step / spread) ** 1.5)
-        pygame.draw.rect(
+        sprites.blit_round_rect(
             layer,
-            (*color, shade),
             pygame.Rect(
                 spread - step,
                 spread - step,
                 rect.width + 2 * step,
                 rect.height + 2 * step,
             ),
-            width=2,
-            border_radius=radius + step,
+            radius + step,
+            (*color, shade),
+            stroke,
         )
     surface.blit(layer, (rect.x - spread, rect.y - spread))
 
@@ -532,17 +566,29 @@ def _draw_panel(
     *,
     radius: int,
     border: config.Color | None = None,
-    border_width: int = 2,
+    border_width: int | None = None,
     shadow: bool = True,
-    shadow_spread: int = _SHADOW_SPREAD,
+    shadow_spread: int | None = None,
 ) -> None:
-    """画一块圆角渐变面板（投影 + 渐变底 + 描边），是各种组件的公共外观。"""
+    """画一块圆角渐变面板（投影 + 渐变底 + 描边），是各种组件的公共外观。
+
+    所有长度都是**屏幕尺寸**：调用方遇到 ``config`` 里的设计常量时先过一遍
+    :func:`another_arrow_rt265.viewport.s`，而来自 ``rect`` 的值（如 ``rect.height // 2``）
+    直接用。``border_width`` 省略时取设计值 ``2`` 并按当前视口换算。
+
+    渐变底的圆角由 :func:`_gradient` 的蒙版抠出，描边则走超采样贴图，
+    两者都带过渡色，因此面板放大后四角不会出现阶梯。
+    """
     if shadow:
         _draw_shadow(surface, rect, radius, spread=shadow_spread)
     surface.blit(_gradient(rect.size, top, bottom, radius), rect.topleft)
     if border is not None:
-        pygame.draw.rect(
-            surface, border, rect, width=border_width, border_radius=radius
+        sprites.blit_round_rect(
+            surface,
+            rect,
+            radius,
+            border,
+            viewport.s(2) if border_width is None else border_width,
         )
 
 
@@ -554,6 +600,42 @@ def _draw_arrow_glyph(
     color: config.Color,
 ) -> None:
     """在 ``center`` 处画一个指向 ``direction`` 的小箭头（装饰用）。
+
+    形状见 :func:`_paint_arrow_glyph`；这里贴的是按“尺寸 + 方向 + 颜色”缓存的
+    抗锯齿贴图（开始界面那四个方向圆牌每帧都一样，没必要每帧重画）。
+    """
+    sprite = _arrow_glyph_sprite(round(size), direction, color)
+    surface.blit(sprite, sprite.get_rect(center=(round(center[0]), round(center[1]))))
+
+
+@functools.lru_cache(maxsize=_SMALL_SPRITE_CACHE)
+def _arrow_glyph_sprite(
+    size: int, direction: Direction, color: config.Color
+) -> pygame.Surface:
+    """返回一张装饰箭头的抗锯齿贴图（正方形，箭头居中）。"""
+    # 图形的最大外延：箭头尖端 0.66×size，再加上杆的半线宽（≈0.14×size），留一点余量。
+    span = 2 * round(size * 0.82) + 3
+
+    def paint(canvas: pygame.Surface, factor: int) -> None:
+        _paint_arrow_glyph(
+            canvas,
+            (canvas.get_width() / 2, canvas.get_height() / 2),
+            size * factor,
+            direction,
+            color,
+        )
+
+    return sprites.render((span, span), paint)
+
+
+def _paint_arrow_glyph(
+    surface: pygame.Surface,
+    center: tuple[float, float],
+    size: float,
+    direction: Direction,
+    color: config.Color,
+) -> None:
+    """把装饰箭头画到 ``surface`` 上（尺寸单位由调用方决定）。
 
     由一个三角箭头和一根短杆拼成——只画三角形会像播放键，加上杆之后
     才和棋盘上的箭头有一致的“方向感”。
@@ -593,7 +675,7 @@ def _draw_arrow_glyph(
 def board_area() -> pygame.Rect:
     """返回棋盘可用的屏幕区域（位于信息栏下方、窗口留白之内）。"""
     top = config.HUD_HEIGHT + config.BOARD_TOP_GAP
-    return pygame.Rect(
+    return viewport.rect(
         config.HUD_PADDING,
         top,
         config.WINDOW_WIDTH - 2 * config.HUD_PADDING,
@@ -603,11 +685,11 @@ def board_area() -> pygame.Rect:
 
 def hud_rect() -> pygame.Rect:
     """返回顶部信息栏的区域。"""
-    return pygame.Rect(0, 0, config.WINDOW_WIDTH, config.HUD_HEIGHT)
+    return viewport.rect(0, 0, config.WINDOW_WIDTH, config.HUD_HEIGHT)
 
 
-def hud_home_button_rect() -> pygame.Rect:
-    """返回信息栏左上角“回到主界面”图标按钮的区域。"""
+def _hud_home_button() -> pygame.Rect:
+    """设计坐标下信息栏左上角“回到主界面”按钮的区域。"""
     width, height = _HUD_ICON_BUTTON_SIZE
     return pygame.Rect(
         config.HUD_PADDING,
@@ -617,15 +699,21 @@ def hud_home_button_rect() -> pygame.Rect:
     )
 
 
+def hud_home_button_rect() -> pygame.Rect:
+    """返回信息栏左上角“回到主界面”图标按钮的区域（屏幕坐标）。"""
+    return viewport.map(_hud_home_button())
+
+
 def hud_chip_rects() -> tuple[pygame.Rect, pygame.Rect, pygame.Rect, pygame.Rect]:
     """返回信息栏四块统计卡片（关卡 / 剩余箭头 / 用时 / 失误）的区域。
 
     前三块从左往右排在“回到主界面”按钮之后，第四块贴住“重新开始”按钮左侧，
-    因此按钮宽度变化时两端的间距仍然保持一致。
+    因此按钮宽度变化时两端的间距仍然保持一致。整行在**设计坐标**里算出来，
+    最后统一映射到屏幕，所以“整行恰好填满两侧留白”在任何窗口尺寸下都成立。
     """
     top = (config.HUD_HEIGHT - _HUD_CHIP_HEIGHT) // 2
     level = pygame.Rect(
-        hud_home_button_rect().right + _HUD_NAV_GAP,
+        _hud_home_button().right + _HUD_NAV_GAP,
         top,
         _HUD_CHIP_WIDTHS[0],
         _HUD_CHIP_HEIGHT,
@@ -637,12 +725,17 @@ def hud_chip_rects() -> tuple[pygame.Rect, pygame.Rect, pygame.Rect, pygame.Rect
         arrows.right + _HUD_CHIP_GAP, top, _HUD_CHIP_WIDTHS[2], _HUD_CHIP_HEIGHT
     )
     mistakes = pygame.Rect(0, top, _HUD_CHIP_WIDTHS[3], _HUD_CHIP_HEIGHT)
-    mistakes.right = restart_button_rect().left - _HUD_CHIP_BUTTON_GAP
-    return (level, arrows, elapsed, mistakes)
+    mistakes.right = _restart_button().left - _HUD_CHIP_BUTTON_GAP
+    return (
+        viewport.map(level),
+        viewport.map(arrows),
+        viewport.map(elapsed),
+        viewport.map(mistakes),
+    )
 
 
-def restart_button_rect() -> pygame.Rect:
-    """返回信息栏上“重新开始”按钮的区域。"""
+def _restart_button() -> pygame.Rect:
+    """设计坐标下信息栏“重新开始”按钮的区域。"""
     width, height = _RESTART_BUTTON_SIZE
     return pygame.Rect(
         config.WINDOW_WIDTH - config.HUD_PADDING - width,
@@ -652,17 +745,23 @@ def restart_button_rect() -> pygame.Rect:
     )
 
 
+def restart_button_rect() -> pygame.Rect:
+    """返回信息栏上“重新开始”按钮的区域。"""
+    return viewport.map(_restart_button())
+
+
 def guide_toggle_rect() -> pygame.Rect:
     """返回右下角“辅助线”开关的区域。
 
     它贴在窗口右下角，是游戏画面上唯一一个“与关卡进度无关、随时可点”的控件。
     位置受一条硬约束：**不能盖住任何格子**——最大的棋盘（6x6）最后一排格子
-    一直铺到 y=674，因此底边只留 ``config.GUIDE_TOGGLE_MARGIN`` 里的 8px，
-    横向则照常用 24px。``tests/test_ui.py`` 会对每一关逐一验证这一点。
+    一直铺到设计坐标的 y=674，因此底边只留 ``config.GUIDE_TOGGLE_MARGIN`` 里的 8px，
+    横向则照常用 24px。窗口缩放时格子与开关按同一个系数放大，
+    所以这条“开关在棋盘外面”的关系不会变（``tests/test_ui.py`` 逐关逐格核对）。
     """
     width, height = config.GUIDE_TOGGLE_SIZE
     right_margin, bottom_margin = config.GUIDE_TOGGLE_MARGIN
-    return pygame.Rect(
+    return viewport.rect(
         config.WINDOW_WIDTH - right_margin - width,
         config.WINDOW_HEIGHT - bottom_margin - height,
         width,
@@ -673,9 +772,9 @@ def guide_toggle_rect() -> pygame.Rect:
 def _guide_toggle_track_rect() -> pygame.Rect:
     """返回开关轨道的区域（贴在胶囊右侧、垂直居中）。"""
     pill = guide_toggle_rect()
-    width, height = config.GUIDE_TOGGLE_TRACK_SIZE
+    width, height = viewport.scaled(config.GUIDE_TOGGLE_TRACK_SIZE)
     return pygame.Rect(
-        pill.right - config.GUIDE_TOGGLE_PADDING - width,
+        pill.right - viewport.s(config.GUIDE_TOGGLE_PADDING) - width,
         pill.centery - height // 2,
         width,
         height,
@@ -684,23 +783,23 @@ def _guide_toggle_track_rect() -> pygame.Rect:
 
 def start_button_rect() -> pygame.Rect:
     """返回开始界面上“开始游戏”按钮的区域。"""
-    return _hero_row_rects(1)[0]
+    return viewport.map(_hero_row_rects(1)[0])
 
 
 def about_button_rect() -> pygame.Rect:
     """返回开始界面页脚“关于”按钮的区域。"""
-    return _footer_row_rects(1)[0]
+    return viewport.map(_footer_row_rects(1)[0])
 
 
 def about_back_button_rect() -> pygame.Rect:
     """返回“关于”界面页脚“返回主界面”按钮的区域。"""
-    return _footer_row_rects(1)[0]
+    return viewport.map(_footer_row_rects(1)[0])
 
 
 def _stack_sections(
     sections: tuple[MenuSection, ...], top: int
 ) -> tuple[pygame.Rect, ...]:
-    """把说明卡片自上而下排开，返回它们的区域。"""
+    """把说明卡片自上而下排开，返回它们的区域（设计坐标）。"""
     left = (config.WINDOW_WIDTH - _SECTION_WIDTH) // 2
     rects: list[pygame.Rect] = []
     cursor = top
@@ -713,7 +812,7 @@ def _stack_sections(
 
 
 def _hero_row_rects(count: int) -> tuple[pygame.Rect, ...]:
-    """返回主按钮行的区域（居中排在标题装饰下方）。"""
+    """返回主按钮行的区域（居中排在标题装饰下方，设计坐标）。"""
     width, height = _HERO_BUTTON_SIZE
     left = _row_left(count, width)
     top = _PAGE_HERO_BUTTON_Y - height // 2
@@ -724,7 +823,7 @@ def _hero_row_rects(count: int) -> tuple[pygame.Rect, ...]:
 
 
 def _footer_row_rects(count: int) -> tuple[pygame.Rect, ...]:
-    """返回页脚按钮行的区域（居中，并与页面底部留白对齐）。"""
+    """返回页脚按钮行的区域（居中，并与页面底部留白对齐，设计坐标）。"""
     width, height = _FOOTER_BUTTON_SIZE
     left = _row_left(count, width)
     top = config.WINDOW_HEIGHT - _PAGE_FOOTER_MARGIN - height
@@ -735,13 +834,16 @@ def _footer_row_rects(count: int) -> tuple[pygame.Rect, ...]:
 
 
 def _row_left(count: int, width: int) -> int:
-    """返回 ``count`` 个宽 ``width`` 的按钮横向居中时的左边界。"""
+    """返回 ``count`` 个宽 ``width`` 的按钮横向居中时的左边界（设计坐标）。"""
     row_width = count * width + max(0, count - 1) * _MENU_BUTTON_GAP
     return (config.WINDOW_WIDTH - row_width) // 2
 
 
 def menu_layout(page: MenuPage) -> MenuLayout:
     """算出一个菜单页的骨架坐标：说明卡片、提示行与按钮。
+
+    整个页面先在**设计坐标**里排好（各块之间的间距都是设计值），最后统一按当前
+    视口映射到屏幕，因此窗口缩放时各块之间的比例与相对位置不会变。
 
     绘制（:func:`draw_menu_page`）与命中判定（``Game._handle_menu_click``）都读
     这一份结果，因此按钮画在哪里就能点在哪里，不会两边各算一遍而错位。
@@ -768,19 +870,28 @@ def menu_layout(page: MenuPage) -> MenuLayout:
     hero_index = footer_index = 0
     for button in page.buttons:
         if button.placement is MenuButtonPlacement.HERO:
-            buttons.append((button, hero_rects[hero_index]))
+            buttons.append((button, viewport.map(hero_rects[hero_index])))
             hero_index += 1
         else:
-            buttons.append((button, footer_rects[footer_index]))
+            buttons.append((button, viewport.map(footer_rects[footer_index])))
             footer_index += 1
-    return MenuLayout(sections=sections, hint=hint, buttons=tuple(buttons))
+    return MenuLayout(
+        sections=tuple(viewport.map(rect) for rect in sections),
+        hint=None if hint is None else viewport.map(hint),
+        buttons=tuple(buttons),
+    )
 
 
-def overlay_card_rect() -> pygame.Rect:
-    """返回结算卡片的区域（在窗口中居中）。"""
+def _overlay_card() -> pygame.Rect:
+    """设计坐标下结算卡片的区域（在设计框里居中）。"""
     card = pygame.Rect((0, 0), _CARD_SIZE)
     card.center = (config.WINDOW_WIDTH // 2, config.WINDOW_HEIGHT // 2)
     return card
+
+
+def overlay_card_rect() -> pygame.Rect:
+    """返回结算卡片的区域（在窗口中居中，屏幕坐标）。"""
+    return viewport.map(_overlay_card())
 
 
 def tutorial_panel_rect() -> pygame.Rect:
@@ -788,19 +899,22 @@ def tutorial_panel_rect() -> pygame.Rect:
 
     第 1 关是 4x4 的小棋盘，格子尺寸被 ``config.MAX_CELL_SIZE`` 顶住，于是
     棋盘的上下各留出一段空白；提示条放在上侧那条里，既不遮挡棋子，也不必把
-    棋盘缩小（第 1 关的棋盘位置因此和正式关卡完全一致）。
-    ``tests/test_tutorial.py`` 会把“提示条不压到第 1 关棋盘”钉住。
+    棋盘缩小（第 1 关的棋盘位置因此和正式关卡完全一致）。窗口缩放时提示条与格子
+    按同一个系数变化，这条关系不变；``tests/test_tutorial.py`` 会把“提示条不压到
+    第 1 关棋盘”钉住。
     """
     area = board_area()
-    return pygame.Rect(area.left, area.top, area.width, config.TUTORIAL_BAR_HEIGHT)
+    return pygame.Rect(
+        area.left, area.top, area.width, viewport.s(config.TUTORIAL_BAR_HEIGHT)
+    )
 
 
 def tutorial_skip_button_rect() -> pygame.Rect:
     """返回教程提示条右侧“跳过教程”按钮的区域。"""
     panel = tutorial_panel_rect()
-    width, height = config.TUTORIAL_SKIP_SIZE
+    width, height = viewport.scaled(config.TUTORIAL_SKIP_SIZE)
     return pygame.Rect(
-        panel.right - _TUTORIAL_SKIP_MARGIN - width,
+        panel.right - viewport.s(_TUTORIAL_SKIP_MARGIN) - width,
         panel.centery - height // 2,
         width,
         height,
@@ -823,12 +937,13 @@ def _overlay_button_row() -> tuple[pygame.Rect, pygame.Rect]:
     两个按钮等宽并排，整体在卡片里居中；绘制与命中判定共用这一份坐标。
     """
     card = overlay_card_rect()
-    width, height = _OVERLAY_BUTTON_SIZE
-    top = card.bottom - _OVERLAY_BUTTON_MARGIN - height
-    row_width = 2 * width + _OVERLAY_BUTTON_GAP
+    width, height = viewport.scaled(_OVERLAY_BUTTON_SIZE)
+    gap = viewport.s(_OVERLAY_BUTTON_GAP)
+    top = card.bottom - viewport.s(_OVERLAY_BUTTON_MARGIN) - height
+    row_width = 2 * width + gap
     left = card.centerx - row_width // 2
     home = pygame.Rect(left, top, width, height)
-    primary = pygame.Rect(left + width + _OVERLAY_BUTTON_GAP, top, width, height)
+    primary = pygame.Rect(left + width + gap, top, width, height)
     return (home, primary)
 
 
@@ -967,7 +1082,7 @@ def draw_guide_toggle(
         config.COLOR_BUTTON_BOTTOM_HOVER if lit else config.COLOR_BUTTON_BOTTOM,
         radius=pill.height // 2,
         border=config.COLOR_BUTTON_BORDER,
-        shadow_spread=6,
+        shadow_spread=viewport.s(6),
     )
 
     label = _TEXT_LABEL.font().render(
@@ -978,26 +1093,26 @@ def draw_guide_toggle(
     surface.blit(
         label,
         (
-            pill.left + config.GUIDE_TOGGLE_PADDING,
+            pill.left + viewport.s(config.GUIDE_TOGGLE_PADDING),
             pill.centery - label.get_height() // 2,
         ),
     )
 
-    pygame.draw.rect(
+    sprites.blit_round_rect(
         surface,
-        config.GUIDE_TOGGLE_TRACK_ON if enabled else config.GUIDE_TOGGLE_TRACK_OFF,
         track,
-        border_radius=track.height // 2,
+        track.height // 2,
+        config.GUIDE_TOGGLE_TRACK_ON if enabled else config.GUIDE_TOGGLE_TRACK_OFF,
     )
     # 滑块靠向哪一侧就是“开 / 关”的第二个信号（颜色之外再给一层冗余表达）。
-    radius = config.GUIDE_TOGGLE_KNOB_RADIUS
+    radius = viewport.s(config.GUIDE_TOGGLE_KNOB_RADIUS)
     margin = (track.height - 2 * radius) // 2
     knob_x = track.right - radius - margin if enabled else track.left + radius + margin
-    pygame.draw.circle(
+    sprites.blit_circle(
         surface,
-        config.GUIDE_TOGGLE_KNOB_ON if enabled else config.GUIDE_TOGGLE_KNOB_OFF,
         (knob_x, track.centery),
         radius,
+        config.GUIDE_TOGGLE_KNOB_ON if enabled else config.GUIDE_TOGGLE_KNOB_OFF,
     )
 
 
@@ -1031,9 +1146,9 @@ def draw_tutorial(
         panel,
         config.COLOR_CARD_TOP,
         config.COLOR_CARD_BOTTOM,
-        radius=_TUTORIAL_BAR_RADIUS,
+        radius=viewport.s(_TUTORIAL_BAR_RADIUS),
         border=config.COLOR_PRIMARY,
-        shadow_spread=6,
+        shadow_spread=viewport.s(6),
     )
 
     # 左侧进度读数 → 竖分隔线 → 指引文案 → 右侧“跳过教程”，一行排开。
@@ -1043,25 +1158,27 @@ def draw_tutorial(
     surface.blit(
         progress_label,
         progress_label.get_rect(
-            midleft=(panel.left + _TUTORIAL_BAR_PADDING, panel.centery)
+            midleft=(panel.left + viewport.s(_TUTORIAL_BAR_PADDING), panel.centery)
         ),
     )
     divider_x = (
         panel.left
-        + _TUTORIAL_BAR_PADDING
+        + viewport.s(_TUTORIAL_BAR_PADDING)
         + progress_label.get_width()
-        + _TUTORIAL_DIVIDER_GAP
+        + viewport.s(_TUTORIAL_DIVIDER_GAP)
     )
     pygame.draw.line(
         surface,
         config.COLOR_PANEL_BORDER,
-        (divider_x, panel.top + 10),
-        (divider_x, panel.bottom - 10),
+        (divider_x, panel.top + viewport.s(10)),
+        (divider_x, panel.bottom - viewport.s(10)),
     )
     text = _TEXT_RULE.font().render(hint.text, True, config.COLOR_TEXT)
     surface.blit(
         text,
-        text.get_rect(midleft=(divider_x + _TUTORIAL_DIVIDER_GAP, panel.centery)),
+        text.get_rect(
+            midleft=(divider_x + viewport.s(_TUTORIAL_DIVIDER_GAP), panel.centery)
+        ),
     )
     _draw_compact_button(surface, tutorial_skip_button_rect(), "跳过教程", mouse)
 
@@ -1085,7 +1202,7 @@ def _draw_tutorial_highlight(
         return
 
     pulse = 0.5 + 0.5 * math.sin(_tutorial_phase() * math.tau)
-    grow = round(config.TUTORIAL_RING_GROW + 2 * pulse)
+    grow = config.TUTORIAL_RING_GROW + 2 * pulse
     faint, bright = _TUTORIAL_RING_ALPHA
     alpha = round(faint + (bright - faint) * pulse)
     _draw_cell_ring(
@@ -1120,22 +1237,31 @@ def _tutorial_phase() -> float:
 def _draw_cell_ring(
     surface: pygame.Surface,
     cell: pygame.Rect,
-    grow: int,
+    grow: float,
     color: tuple[int, int, int, int],
     *,
     width: int,
 ) -> None:
-    """在格子外围画一圈半透明描边（``color`` 的第 4 个分量是透明度）。"""
-    rect = cell.inflate(2 * grow, 2 * grow)
-    layer = pygame.Surface(rect.size, pygame.SRCALPHA)
-    pygame.draw.rect(
-        layer,
-        color,
-        layer.get_rect(),
-        width=width,
-        border_radius=config.CELL_RADIUS + grow,
+    """在格子外围画一圈半透明描边（``color`` 的第 4 个分量是透明度）。
+
+    ``grow`` 与 ``width`` 都是**设计长度**（含呼吸动画算出的小数），在这里按当前视口
+    换算，因为要叠加到已经是像素尺寸的 ``cell`` 上。
+
+    环本身贴的是抗锯齿的圆角描边；呼吸时半径会连续变化（每档差一个像素），
+    按半径缓存就够用，而透明度是逐帧变化的，改的是贴图**副本**的整体 alpha。
+    """
+    grow_px = viewport.s(grow)
+    rect = cell.inflate(2 * grow_px, 2 * grow_px)
+    sprite = sprites.round_rect(
+        rect.size,
+        viewport.s(config.CELL_RADIUS) + grow_px,
+        (*color[:3], 255),
+        viewport.s(width),
     )
-    surface.blit(layer, rect.topleft)
+    if color[3] < 255:
+        sprite = sprite.copy()
+        sprite.set_alpha(color[3])
+    surface.blit(sprite, rect.topleft)
 
 
 def draw_overlay(
@@ -1155,24 +1281,30 @@ def draw_overlay(
         card,
         config.COLOR_CARD_TOP,
         config.COLOR_CARD_BOTTOM,
-        radius=_CARD_RADIUS,
+        radius=viewport.s(_CARD_RADIUS),
         border=accent,
-        border_width=3,
-        shadow_spread=12,
+        border_width=viewport.s(3),
+        shadow_spread=viewport.s(12),
     )
     _draw_result_emblem(
-        surface, (card.centerx, card.top + _CARD_EMBLEM_TOP), accent, cleared
+        surface,
+        (card.centerx, card.top + viewport.s(_CARD_EMBLEM_TOP)),
+        accent,
+        cleared,
     )
-
     title = _TEXT_TITLE.font().render(
         "关卡完成！" if cleared else "挑战失败", True, accent
     )
     surface.blit(
-        title, title.get_rect(center=(card.centerx, card.top + _CARD_TITLE_TOP))
+        title,
+        title.get_rect(center=(card.centerx, card.top + viewport.s(_CARD_TITLE_TOP))),
     )
 
     body = _TEXT_BODY.font().render(_result_message(session), True, config.COLOR_TEXT)
-    surface.blit(body, body.get_rect(center=(card.centerx, card.top + _CARD_BODY_TOP)))
+    surface.blit(
+        body,
+        body.get_rect(center=(card.centerx, card.top + viewport.s(_CARD_BODY_TOP))),
+    )
 
     # 刷新记录时这行改用主色（金），一眼就能看出“这把比之前快”。
     record = session.status is GameStatus.LEVEL_CLEARED and session.is_new_record
@@ -1182,7 +1314,8 @@ def draw_overlay(
         config.COLOR_PRIMARY if record else config.COLOR_TEXT_MUTED,
     )
     surface.blit(
-        timing, timing.get_rect(center=(card.centerx, card.top + _CARD_TIME_TOP))
+        timing,
+        timing.get_rect(center=(card.centerx, card.top + viewport.s(_CARD_TIME_TOP))),
     )
 
     _draw_secondary_button(
@@ -1208,41 +1341,86 @@ def _draw_result_emblem(
     accent: config.Color,
     cleared: bool,
 ) -> None:
-    """画结算卡片顶部的圆形徽章：通关画勾、失败画叉。"""
-    radius = _OVERLAY_EMBLEM_RADIUS
-    pygame.draw.circle(
-        surface, _mix(accent, config.COLOR_CARD_BOTTOM, 0.78), center, radius
-    )
-    pygame.draw.circle(surface, accent, center, radius, width=3)
+    """画结算卡片顶部的圆形徽章：通关画勾、失败画叉。
 
-    center_x, center_y = center
-    if cleared:
-        pygame.draw.lines(
-            surface,
-            accent,
-            False,
-            [
-                (center_x - 13, center_y + 1),
-                (center_x - 4, center_y + 10),
-                (center_x + 14, center_y - 10),
-            ],
-            width=5,
+    底色圆、描边环与勾/叉一起画在一张缓存贴图里（见 :func:`_result_emblem_sprite`）：
+    勾与叉都是斜线，贴图能把它们的阶梯一次性去掉，而拼接处也不会多出一条缝。
+    """
+    sprite = _result_emblem_sprite(viewport.s(_OVERLAY_EMBLEM_RADIUS), accent, cleared)
+    surface.blit(sprite, sprite.get_rect(center=(round(center[0]), round(center[1]))))
+
+
+@functools.lru_cache(maxsize=_SMALL_SPRITE_CACHE)
+def _result_emblem_sprite(
+    radius: int, accent: config.Color, cleared: bool
+) -> pygame.Surface:
+    """返回结算徽章的抗锯齿贴图（半径 ``radius``，图形居中）。"""
+    span = 2 * radius + 3
+
+    def paint(canvas: pygame.Surface, factor: int) -> None:
+        center = (canvas.get_width() / 2, canvas.get_height() / 2)
+        pygame.draw.circle(
+            canvas,
+            _mix(accent, config.COLOR_CARD_BOTTOM, 0.78),
+            center,
+            radius * factor,
         )
-    else:
-        pygame.draw.line(
-            surface,
-            accent,
-            (center_x - 10, center_y - 10),
-            (center_x + 10, center_y + 10),
-            width=5,
+        pygame.draw.circle(
+            canvas, accent, center, radius * factor, width=viewport.s(3) * factor
         )
-        pygame.draw.line(
-            surface,
-            accent,
-            (center_x - 10, center_y + 10),
-            (center_x + 10, center_y - 10),
-            width=5,
-        )
+
+        center_x, center_y = center
+        stroke = viewport.s(5) * factor
+        if cleared:
+            pygame.draw.lines(
+                canvas,
+                accent,
+                False,
+                [
+                    (
+                        center_x - viewport.s(13) * factor,
+                        center_y + viewport.s(1) * factor,
+                    ),
+                    (
+                        center_x - viewport.s(4) * factor,
+                        center_y + viewport.s(10) * factor,
+                    ),
+                    (
+                        center_x + viewport.s(14) * factor,
+                        center_y - viewport.s(10) * factor,
+                    ),
+                ],
+                width=stroke,
+            )
+        else:
+            pygame.draw.line(
+                canvas,
+                accent,
+                (
+                    center_x - viewport.s(10) * factor,
+                    center_y - viewport.s(10) * factor,
+                ),
+                (
+                    center_x + viewport.s(10) * factor,
+                    center_y + viewport.s(10) * factor,
+                ),
+                width=stroke,
+            )
+            pygame.draw.line(
+                canvas,
+                accent,
+                (
+                    center_x - viewport.s(10) * factor,
+                    center_y + viewport.s(10) * factor,
+                ),
+                (
+                    center_x + viewport.s(10) * factor,
+                    center_y - viewport.s(10) * factor,
+                ),
+                width=stroke,
+            )
+
+    return sprites.render((span, span), paint)
 
 
 def draw_menu_page(
@@ -1308,19 +1486,25 @@ def draw_about_screen(
 
 def _draw_page_title(surface: pygame.Surface, page: MenuPage) -> None:
     """画菜单页的标题：金色柔光垫底 + 主色文字 + 拉开字距的英文副标题。"""
-    center_x = config.WINDOW_WIDTH // 2
+    center_x = viewport.center()[0]
 
     glow = _TEXT_HERO.font().render(page.title, True, config.COLOR_PRIMARY)
     glow.set_alpha(_PAGE_GLOW_ALPHA)
-    surface.blit(glow, glow.get_rect(center=(center_x, _PAGE_TITLE_Y + 4)))
+    surface.blit(
+        glow,
+        glow.get_rect(center=(center_x, viewport.y(_PAGE_TITLE_Y) + viewport.s(4))),
+    )
 
     title = _TEXT_HERO.font().render(page.title, True, config.COLOR_TEXT)
-    surface.blit(title, title.get_rect(center=(center_x, _PAGE_TITLE_Y)))
+    surface.blit(title, title.get_rect(center=(center_x, viewport.y(_PAGE_TITLE_Y))))
 
     subtitle = _TEXT_SUBTITLE.font().render(
         " ".join(page.subtitle), True, config.COLOR_TEXT_MUTED
     )
-    surface.blit(subtitle, subtitle.get_rect(center=(center_x, _PAGE_SUBTITLE_Y)))
+    surface.blit(
+        subtitle,
+        subtitle.get_rect(center=(center_x, viewport.y(_PAGE_SUBTITLE_Y))),
+    )
 
 
 def _draw_arrow_row(surface: pygame.Surface) -> None:
@@ -1331,25 +1515,27 @@ def _draw_arrow_row(surface: pygame.Surface) -> None:
     top = _PAGE_DECORATION_Y - _HERO_CHIP_SIZE // 2
 
     for index, direction in enumerate(_HERO_DIRECTIONS):
-        rect = pygame.Rect(
-            left + index * (_HERO_CHIP_SIZE + _HERO_CHIP_GAP),
-            top,
-            _HERO_CHIP_SIZE,
-            _HERO_CHIP_SIZE,
+        rect = viewport.map(
+            pygame.Rect(
+                left + index * (_HERO_CHIP_SIZE + _HERO_CHIP_GAP),
+                top,
+                _HERO_CHIP_SIZE,
+                _HERO_CHIP_SIZE,
+            )
         )
         _draw_panel(
             surface,
             rect,
             config.COLOR_PANEL,
             config.COLOR_PANEL_DEEP,
-            radius=16,
+            radius=viewport.s(16),
             border=config.COLOR_PANEL_BORDER,
-            shadow_spread=5,
+            shadow_spread=viewport.s(5),
         )
         _draw_arrow_glyph(
             surface,
             rect.center,
-            _HERO_CHIP_SIZE * 0.34,
+            viewport.s(_HERO_CHIP_SIZE * 0.34),
             direction,
             config.COLOR_PRIMARY,
         )
@@ -1364,28 +1550,34 @@ def _draw_section_panel(
         rect,
         config.COLOR_PANEL,
         config.COLOR_PANEL_DEEP,
-        radius=_SECTION_RADIUS,
+        radius=viewport.s(_SECTION_RADIUS),
         border=config.COLOR_PANEL_BORDER,
-        shadow_spread=10,
+        shadow_spread=viewport.s(10),
     )
 
     caption = _TEXT_SECTION_TITLE.font().render(
         section.caption, True, config.COLOR_PRIMARY
     )
     surface.blit(
-        caption, (rect.left + _SECTION_PADDING, rect.top + _SECTION_CAPTION_TOP)
+        caption,
+        (
+            rect.left + viewport.s(_SECTION_PADDING),
+            rect.top + viewport.s(_SECTION_CAPTION_TOP),
+        ),
     )
 
     font = _TEXT_RULE.font()
-    bullet_x = rect.left + _SECTION_PADDING + 6
-    text_x = rect.left + _SECTION_PADDING + 22
+    bullet_x = rect.left + viewport.s(_SECTION_PADDING + 6)
+    text_x = rect.left + viewport.s(_SECTION_PADDING + 22)
     for index, line in enumerate(section.lines):
-        y = rect.top + _SECTION_FIRST_LINE_TOP + index * _SECTION_LINE_HEIGHT
-        pygame.draw.circle(
+        y = rect.top + viewport.s(
+            _SECTION_FIRST_LINE_TOP + index * _SECTION_LINE_HEIGHT
+        )
+        sprites.blit_circle(
             surface,
-            config.COLOR_PRIMARY,
             (bullet_x, y + font.get_height() // 2),
-            4,
+            viewport.s(4),
+            config.COLOR_PRIMARY,
         )
         surface.blit(font.render(line, True, config.COLOR_TEXT), (text_x, y))
 
@@ -1421,7 +1613,7 @@ def _draw_chip_frame(surface: pygame.Surface, rect: pygame.Rect) -> None:
         rect,
         config.COLOR_PANEL,
         config.COLOR_PANEL_DEEP,
-        radius=_HUD_CHIP_RADIUS,
+        radius=viewport.s(_HUD_CHIP_RADIUS),
         border=config.COLOR_PANEL_BORDER,
         shadow=False,
     )
@@ -1444,15 +1636,18 @@ def _draw_stat_chip(
     _draw_chip_frame(surface, rect)
     surface.blit(
         _TEXT_LABEL.font().render(caption, True, config.COLOR_TEXT_MUTED),
-        (rect.left + _HUD_CHIP_PADDING, rect.top + _HUD_CHIP_CAPTION_TOP),
+        (
+            rect.left + viewport.s(_HUD_CHIP_PADDING),
+            rect.top + viewport.s(_HUD_CHIP_CAPTION_TOP),
+        ),
     )
     label = _TEXT_VALUE.font().render(value, True, value_color)
     left = (
-        rect.right - _HUD_CHIP_PADDING - label.get_width()
+        rect.right - viewport.s(_HUD_CHIP_PADDING) - label.get_width()
         if align_right
-        else rect.left + _HUD_CHIP_PADDING
+        else rect.left + viewport.s(_HUD_CHIP_PADDING)
     )
-    surface.blit(label, (left, rect.top + _HUD_CHIP_VALUE_TOP))
+    surface.blit(label, (left, rect.top + viewport.s(_HUD_CHIP_VALUE_TOP)))
 
 
 def _draw_mistake_chip(
@@ -1466,21 +1661,25 @@ def _draw_mistake_chip(
     _draw_chip_frame(surface, rect)
     surface.blit(
         _TEXT_LABEL.font().render("失误", True, config.COLOR_TEXT_MUTED),
-        (rect.left + _HUD_CHIP_PADDING, rect.top + _HUD_CHIP_CAPTION_TOP),
+        (
+            rect.left + viewport.s(_HUD_CHIP_PADDING),
+            rect.top + viewport.s(_HUD_CHIP_CAPTION_TOP),
+        ),
     )
 
-    center_y = rect.top + _HUD_CHIP_VALUE_TOP + 15
+    center_y = rect.top + viewport.s(_HUD_CHIP_VALUE_TOP + 15)
     # 圆点整组在卡片里居中，与前后的“剩余箭头 / 重新开始”对齐得好看一些。
-    span = (session.max_mistakes - 1) * _MISTAKE_SPACING
+    spacing = viewport.s(_MISTAKE_SPACING)
+    span = (session.max_mistakes - 1) * spacing
     first_x = rect.centerx - span // 2
     for index in range(session.max_mistakes):
-        center = (first_x + index * _MISTAKE_SPACING, center_y)
+        center = (first_x + index * spacing, center_y)
         color = (
             config.COLOR_MISTAKE
             if index < session.mistakes_left
             else config.COLOR_MISTAKE_SPENT
         )
-        pygame.draw.circle(surface, color, center, _MISTAKE_RADIUS)
+        sprites.blit_circle(surface, center, viewport.s(_MISTAKE_RADIUS), color)
 
 
 def _draw_secondary_button(
@@ -1501,7 +1700,7 @@ def _draw_secondary_button(
         bottom,
         radius=rect.height // 2,
         border=config.COLOR_BUTTON_BORDER,
-        shadow_spread=6,
+        shadow_spread=viewport.s(6),
     )
     _draw_button_content(surface, rect, text, config.COLOR_BUTTON_TEXT, icon)
 
@@ -1527,7 +1726,7 @@ def _draw_icon_button(
         bottom,
         radius=rect.height // 2,
         border=config.COLOR_BUTTON_BORDER,
-        shadow_spread=6,
+        shadow_spread=viewport.s(6),
     )
     icons.draw_icon(
         surface,
@@ -1558,7 +1757,7 @@ def _draw_primary_button(
         _mix(accent, (0, 0, 0), 0.10 if hovered else 0.26),
         radius=radius,
         border=_mix(accent, (255, 255, 255), 0.35),
-        shadow_spread=8,
+        shadow_spread=viewport.s(8),
     )
     _draw_button_content(surface, rect, text, config.COLOR_ON_PRIMARY, icon)
 
@@ -1601,18 +1800,20 @@ def _draw_button_content(
 ) -> None:
     """把“图标 + 文字”当成一个整体在按钮里居中。"""
     label = style.font().render(text, True, color)
+    icon_size = viewport.s(_BUTTON_ICON_SIZE)
+    icon_gap = viewport.s(_BUTTON_ICON_GAP)
     content_width = label.get_width()
     if icon is not None:
-        content_width += _BUTTON_ICON_SIZE + _BUTTON_ICON_GAP
+        content_width += icon_size + icon_gap
 
     left = rect.centerx - content_width // 2
     if icon is not None:
         icons.draw_icon(
             surface,
             icon,
-            (left + _BUTTON_ICON_SIZE // 2, rect.centery),
-            _BUTTON_ICON_SIZE,
+            (left + icon_size // 2, rect.centery),
+            icon_size,
             color,
         )
-        left += _BUTTON_ICON_SIZE + _BUTTON_ICON_GAP
+        left += icon_size + icon_gap
     surface.blit(label, (left, rect.centery - label.get_height() // 2))

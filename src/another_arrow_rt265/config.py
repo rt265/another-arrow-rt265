@@ -10,10 +10,19 @@ from typing import Final
 Color = tuple[int, int, int]
 
 # ------------------------------------------------------------------ 窗口
+# 初始窗口尺寸，同时也是整套界面的**设计尺寸**：`ui.py` / `board.py` 里的布局常量
+# 全都按它写成绝对值，运行时再由 `viewport` 按实际窗口等比换算（见 viewport.py）。
 WINDOW_WIDTH: Final[int] = 720
 WINDOW_HEIGHT: Final[int] = 720
+WINDOW_SIZE: Final[tuple[int, int]] = (WINDOW_WIDTH, WINDOW_HEIGHT)
 WINDOW_TITLE: Final[str] = "Another Arrow"
 FPS: Final[int] = 60
+# 窗口可以自由缩放，但缩放系数有下限：窗口小于设计尺寸时不再把界面缩小，
+# 设计尺寸下的字号与格子尺寸是这套界面的下限，再小就该重新排版而不是缩放了。
+MIN_SCALE: Final[float] = 1.0
+# 缩放系数的量化步长（1/16）：拖拽窗口会产生无穷多个中间尺寸，量化之后按尺寸缓存的
+# 贴图 / 字体不会每个中间值各留一份，肉眼也看不出这一档的差别。
+SCALE_STEP: Final[float] = 1 / 16
 
 # ------------------------------------------------------------------ 项目
 # 显示在“关于”界面上：与 pyproject.toml 的 version 保持一致（测试会钉住这一点）。
@@ -30,6 +39,8 @@ BOARD_MARGIN: Final[int] = 40
 BOARD_TOP_GAP: Final[int] = 24
 
 # ------------------------------------------------------------------ 棋盘
+# 以下都是**设计尺寸下的值**：窗口缩放时由 `viewport` 等比换算，因此窗口变大时
+# 格子、间隙与圆角会一起变大（而不是“窗口大了、棋盘还是原来那么大”）。
 MAX_CELL_SIZE: Final[int] = 112
 CELL_GAP: Final[int] = 6
 BOARD_RADIUS: Final[int] = 24

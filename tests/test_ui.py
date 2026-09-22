@@ -7,7 +7,7 @@ import itertools
 import pygame
 import pytest
 
-from another_arrow_rt265 import config, icons, tutorial, ui
+from another_arrow_rt265 import config, icons, tutorial, ui, viewport
 from another_arrow_rt265.levels import LEVELS, Level
 from another_arrow_rt265.session import GameStatus, Session
 
@@ -416,6 +416,27 @@ def test_draw_guide_toggle_highlights_on_hover() -> None:
     assert pygame.image.tobytes(idle, "RGB") != pygame.image.tobytes(hovered, "RGB")
 
 
+def test_guide_toggle_knob_edges_are_anti_aliased() -> None:
+    """开关滑块与轨道之间要有过渡色：滑块是抗锯齿贴图画上去的，不是硬边圆。
+
+    取样框取轨道内部一段（避开轨道自身的圆角）：硬边画法在这里只会出现
+    “轨道色 + 滑块色”两种颜色。
+    """
+    surface = _surface()
+    surface.fill(config.GUIDE_TOGGLE_TRACK_OFF)
+    ui.draw_guide_toggle(surface, False)
+
+    box = ui._guide_toggle_track_rect().inflate(-12, -6)
+    colors = {
+        surface.get_at((x, y))[:3]
+        for x in range(box.left, box.right)
+        for y in range(box.top, box.bottom)
+    }
+    assert config.GUIDE_TOGGLE_TRACK_OFF in colors
+    assert config.GUIDE_TOGGLE_KNOB_OFF in colors
+    assert len(colors) > 2, "滑块边缘没有过渡色，说明又画成了硬边"
+
+
 @pytest.mark.parametrize("status", list(GameStatus))
 def test_draw_ui_renders_in_every_state(status: GameStatus) -> None:
     surface = _surface()
@@ -501,3 +522,110 @@ def test_draw_background_paints_a_top_to_bottom_gradient() -> None:
     top = surface.get_at((4, 4))[:3]
     bottom = surface.get_at((4, config.WINDOW_HEIGHT - 4))[:3]
     assert sum(top) > sum(bottom), "背景应当自上而下由亮转暗"
+
+
+# ---------------------------------------------------------------- 窗口缩放
+
+#: 窗口自由缩放后要逐一套一遍的窗口尺寸：设计尺寸、正方形放大、横幅、竖屏。
+WINDOW_SIZES = ((720, 720), (1080, 1080), (1440, 900), (900, 1440))
+
+
+@pytest.fixture(params=WINDOW_SIZES)
+def window(request: pytest.FixtureRequest) -> viewport.Viewport:
+    """把当前视口切到某个窗口尺寸（用例结束后由 ``conftest`` 复位）。
+
+    布局常量都是按设计尺寸写的绝对值，这里的尺寸矩阵负责证明它们换个窗口仍然成立。
+    """
+    return viewport.set_current(viewport.Viewport.fit(request.param))
+
+
+def test_hud_row_fills_the_design_box_at_any_window_size(
+    window: viewport.Viewport,
+) -> None:
+    """信息栏整行仍然“左贴齐、右贴齐”，只是整行按视口等比放大。"""
+    row = (ui.hud_home_button_rect(), *ui.hud_chip_rects(), ui.restart_button_rect())
+
+    assert row[0].left == window.x(config.HUD_PADDING)
+    assert row[-1].right == window.x(config.WINDOW_WIDTH - config.HUD_PADDING)
+    for previous, current in itertools.pairwise(row):
+        assert previous.right <= current.left
+    assert all(ui.hud_rect().contains(rect) for rect in row)
+
+
+def test_board_area_follows_the_window_size(window: viewport.Viewport) -> None:
+    """棋盘可用区域等比缩放，并且始终留在设计框内（不会跑到留白上）。"""
+    area = ui.board_area()
+    top = config.HUD_HEIGHT + config.BOARD_TOP_GAP
+
+    assert area.left == window.x(config.HUD_PADDING)
+    assert area.top == window.y(top)
+    assert area.width == window.s(config.WINDOW_WIDTH - 2 * config.HUD_PADDING)
+    assert area.bottom == window.y(config.WINDOW_HEIGHT - config.BOARD_MARGIN)
+    assert window.rect(0, 0, *config.WINDOW_SIZE).contains(area)
+
+
+def test_menu_pages_stay_centred_and_inside_the_design_box(
+    window: viewport.Viewport,
+) -> None:
+    """菜单页的各块仍然居中、不越界：排版算的是设计坐标，最后统一映射。"""
+    box = window.rect(0, 0, *config.WINDOW_SIZE)
+
+    for page in (ui.start_page(6, 3), ui.about_page(6, 3)):
+        layout = ui.menu_layout(page)
+        blocks = [*layout.sections, *(rect for _, rect in layout.buttons)]
+        if layout.hint is not None:
+            blocks.append(layout.hint)
+        for rect in blocks:
+            assert box.contains(rect), page.title
+
+    assert ui.start_button_rect().centerx == window.center()[0]
+
+
+def test_guide_toggle_never_covers_a_cell_at_any_window_size(
+    window: viewport.Viewport,
+) -> None:
+    """“开关在棋盘外面”这条关系与窗口尺寸无关：两者按同一个系数缩放。"""
+    toggle = ui.guide_toggle_rect()
+    for index in range(len(LEVELS)):
+        board = Session(ui.board_area(), level_index=index).board
+        for row in range(board.rows):
+            for col in range(board.cols):
+                assert not toggle.colliderect(board.cell_rect(row, col)), (
+                    f"第 {index + 1} 关的 ({row}, {col}) 被辅助线开关压住了"
+                )
+
+
+def test_text_is_rendered_at_the_scaled_size() -> None:
+    """窗口放大后文字是**按更大的字号重新渲染**的，而不是把位图拉大（后者会糊）。"""
+    base = ui._TEXT_BODY.font().render("窗口缩放", True, config.COLOR_TEXT)
+
+    viewport.set_current(viewport.Viewport.fit((1440, 1440)))
+    doubled = ui._TEXT_BODY.font().render("窗口缩放", True, config.COLOR_TEXT)
+
+    assert doubled.get_height() > base.get_height()
+    assert doubled.get_width() == pytest.approx(2 * base.get_width(), rel=0.15)
+
+
+def test_a_window_smaller_than_the_design_keeps_the_full_size() -> None:
+    """窗口小于设计尺寸时只裁掉多出来的部分，界面尺寸不变（不缩小到看不清）。"""
+    design = (ui.hud_home_button_rect(), ui.restart_button_rect())
+
+    viewport.set_current(viewport.Viewport.fit((560, 560)))
+
+    assert viewport.current().scale == config.MIN_SCALE
+    smaller = (ui.hud_home_button_rect(), ui.restart_button_rect())
+    assert smaller[0].size == design[0].size
+    assert smaller[1].size == design[1].size
+
+
+def test_scaled_drawing_covers_the_whole_window(window: viewport.Viewport) -> None:
+    """背景要铺满整个窗口（含留白），不能只在设计框里画一块。"""
+    width, height = window.size
+    surface = pygame.Surface(window.size)
+    surface.fill((255, 0, 255))
+
+    ui.draw_start_screen(surface, _session())
+
+    corners = ((2, 2), (width - 3, 2), (2, height - 3), (width - 3, height - 3))
+    for corner in corners:
+        assert surface.get_at(corner)[:3] != (255, 0, 255), corner

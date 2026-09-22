@@ -32,6 +32,27 @@ def _painted_pixels(surface: pygame.Surface) -> int:
     )
 
 
+def _painted_colors(surface: pygame.Surface) -> set[config.Color]:
+    """收集被画过的像素颜色。"""
+    return {
+        (int(pixel[0]), int(pixel[1]), int(pixel[2]))
+        for x in range(surface.get_width())
+        for y in range(surface.get_height())
+        if (pixel := surface.get_at((x, y)))[:3] != BACKGROUND
+    }
+
+
+def _is_a_blend_of_the_color(pixel: config.Color) -> bool:
+    """判断像素是不是“背景色 → 图标色”之间的一档过渡色。
+
+    图标走的是超采样贴图，边缘像素是图形色与背景色按覆盖率混合出来的，因此各个
+    通道的比例（相对图标色）必须一致；用比例而不是具体色值来判定，将来换配色或
+    换画布底色都不必改这里。
+    """
+    ratios = [pixel[index] / COLOR[index] for index in range(3) if COLOR[index] > 0]
+    return max(ratios) - min(ratios) <= 0.05
+
+
 @pytest.mark.parametrize("icon", list(icons.Icon))
 def test_every_icon_paints_something(icon: icons.Icon) -> None:
     assert _painted_pixels(_render(icon)) > 0
@@ -39,14 +60,24 @@ def test_every_icon_paints_something(icon: icons.Icon) -> None:
 
 @pytest.mark.parametrize("icon", list(icons.Icon))
 def test_every_icon_uses_the_requested_color(icon: icons.Icon) -> None:
-    surface = _render(icon)
-    colors = {
-        surface.get_at((x, y))[:3]
-        for x in range(SURFACE_SIZE)
-        for y in range(SURFACE_SIZE)
-        if surface.get_at((x, y))[:3] != BACKGROUND
-    }
-    assert colors == {COLOR}
+    """图标要么用请求的颜色画（图形内部），要么是它与底色的过渡色（抗锯齿边缘）。"""
+    colors = _painted_colors(_render(icon))
+
+    assert COLOR in colors, "图形内部应当正好是请求的颜色"
+    unexpected = sorted(
+        color for color in colors if not _is_a_blend_of_the_color(color)
+    )
+    assert unexpected == [], "只允许出现“图标色 → 背景色”之间的过渡色"
+
+
+@pytest.mark.parametrize("icon", list(icons.Icon))
+def test_every_icon_is_anti_aliased(icon: icons.Icon) -> None:
+    """图标是超采样贴图，边缘因此要有过渡色。
+
+    只有“图标色 + 背景色”两种颜色说明又画回了硬边（`pygame.draw` 的默认效果），
+    这正是本轮要修的那个问题，因此这里把它钉住。
+    """
+    assert len(_painted_colors(_render(icon, size=32))) > 2
 
 
 @pytest.mark.parametrize("icon", list(icons.Icon))

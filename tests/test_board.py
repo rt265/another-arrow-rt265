@@ -557,6 +557,26 @@ def test_flying_arrow_keeps_its_theme_color() -> None:
     assert _pixel_at(_render(board), position) == board.arrow_color(arrow)
 
 
+def test_arrow_chips_are_anti_aliased() -> None:
+    """圆片与箭头图形的边缘要有过渡色（超采样贴图的效果，见 ``sprites``）。
+
+    直接用 ``pygame.draw`` 画的话，一个格子里只会有“格子底 / 圆片 / 描边 / 箭头”
+    这几种整块颜色（实测 3 种），圆弧与斜边全是台阶；抗锯齿之后必然多出几十种
+    过渡色。这条测试把“素材低分辨率”是否被改回去钉住。
+    """
+    board = Board(LEVELS[2], AREA)
+    arrow = next(iter(board))
+    surface = _render(board)
+    cell = board.cell_rect(arrow.row, arrow.col)
+
+    colors = {
+        _pixel_at(surface, (x, y))
+        for x in range(cell.left, cell.right)
+        for y in range(cell.top, cell.bottom)
+    }
+    assert len(colors) > 10, f"格子里只有 {len(colors)} 种颜色，边缘是硬边的"
+
+
 # ---------------------------------------------------------------- 辅助线
 
 
@@ -759,3 +779,52 @@ def test_the_switch_paints_every_arrow_dimmed() -> None:
     # 没有悬停的箭头，所有线都用淡色版；亮色只留给鼠标指着的那一条。
     assert _color_hits(guides, config.GUIDE_LINE_COLOR_CLEAR, region) == 0
     assert _color_hits(guides, config.GUIDE_LINE_COLOR_BLOCKED, region) == 0
+
+
+# ---------------------------------------------------------------- 窗口缩放
+
+
+def test_reshape_moves_the_board_without_touching_the_arrows() -> None:
+    """窗口变化只重算几何：格子的尺寸与位置变了，箭头布局一寸不动。"""
+    board = Board(LEVELS[0], pygame.Rect(0, 0, 400, 400))
+    before = [(arrow.row, arrow.col, arrow.direction) for arrow in board]
+    before_cell = board.cell_size
+
+    area = pygame.Rect(0, 0, 800, 800)
+    board.reshape(area)
+
+    assert [(arrow.row, arrow.col, arrow.direction) for arrow in board] == before
+    assert board.rect.center == area.center
+    assert board.cell_size > before_cell
+    assert board.rect.size == (
+        board.cols * board.cell_size,
+        board.rows * board.cell_size,
+    )
+
+
+def test_reshape_keeps_the_selection_and_the_collision_hint() -> None:
+    """缩放不打断玩家：选中与碰撞提示保留，新几何下点击仍然命中同一支箭头。"""
+    board = Board(CROSS_LEVEL, AREA)
+    arrow = board.arrow_at(0, 1)
+    assert arrow is not None
+    assert board.handle_click(board.cell_rect(0, 1).center) is ClickResult.BLOCKED
+
+    board.reshape(AREA.inflate(-200, -200))
+
+    assert board.blocked_flash == arrow
+    assert board.selected == arrow
+    assert board.hit_test(board.cell_rect(0, 1).center) == arrow
+
+
+def test_reshape_drops_the_fly_out_animation() -> None:
+    """飞出动画记的是像素坐标，缩放后不再成立，因此直接放弃（只有 0.32 秒）。"""
+    board = Board(LEVELS[0], AREA)
+    arrow = next(iter(board))
+    assert board.handle_click(board.cell_rect(arrow.row, arrow.col).center) is (
+        ClickResult.CLEARED
+    )
+    assert board.flying
+
+    board.reshape(AREA)
+
+    assert board.flying == []
