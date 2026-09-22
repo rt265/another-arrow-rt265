@@ -6,7 +6,7 @@
 箭头斜边都能直接看出锯齿）。项目里**没有位图素材**（``assets/`` 只有字体），所以
 “素材低分辨率”真正指的就是这件事——窗口越大、格子越大，台阶越显眼。
 
-这里的做法与 :func:`another_arrow_rt265.ui._glow_sprite` 一致：把图形先画在
+这里的做法与 ``pygame.transform.smoothscale`` 配合：把图形先画在
 ``SUPERSAMPLE`` 倍的画布上（一个像素被摊成 4×4 个子像素），再用 ``smoothscale``
 缩回目标尺寸，边缘便按覆盖率得到过渡色。贴图按绘制参数缓存，因此稳定状态下每帧只多一次
 ``blit``，比每帧现画一组带锯齿的图形还省。
@@ -170,7 +170,6 @@ def rounded_mask(size: tuple[int, int], radius: int) -> pygame.Surface:
     """返回一张“白色圆角矩形”蒙版，用来把别的贴图抠出抗锯齿的圆角。
 
     与 ``pygame.draw.rect(border_radius=...)`` 直接画的硬边蒙版相比，这里的四角
-    带过渡色，配合 :data:`pygame.BLEND_RGBA_MULT` 抠出来的圆角不再是阶梯（见
-    :func:`another_arrow_rt265.ui._gradient`）。
+    带过渡色，配合 :data:`pygame.BLEND_RGBA_MULT` 抠出来的圆角不再是阶梯。
     """
     return round_rect(size, radius, (255, 255, 255, 255))

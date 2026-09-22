@@ -35,7 +35,7 @@ def _surface() -> pygame.Surface:
 def _frame(session: Session) -> pygame.Surface:
     """按 ``Game._draw`` 的顺序画一帧游戏画面。"""
     surface = _surface()
-    ui.draw_background(surface, session.board.rect.center)
+    ui.draw_background(surface)
     session.board.draw(surface)
     ui.draw_ui(surface, session)
     return surface

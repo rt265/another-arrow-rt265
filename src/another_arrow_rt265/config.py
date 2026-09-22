@@ -38,14 +38,21 @@ BOARD_MARGIN: Final[int] = 40
 # 棋盘与信息栏之间额外留出的间隙，避免最大的棋盘贴住信息栏。
 BOARD_TOP_GAP: Final[int] = 24
 
+# 界面组件的统一圆角与描边宽度。扁平化之后所有面板 / 卡片 / 按钮共用同一档圆角，
+# 形状上的差别只由尺寸决定（不再出现“卡片 20 / 说明卡片 24 / 按钮胶囊”这样的多套口径）。
+# 唯一的例外是右下角“辅助线”开关的轨道与滑块：它们是开关语义，保持胶囊与正圆。
+UI_RADIUS: Final[int] = 12
+UI_BORDER_WIDTH: Final[int] = 1
+
 # ------------------------------------------------------------------ 棋盘
 # 以下都是**设计尺寸下的值**：窗口缩放时由 `viewport` 等比换算，因此窗口变大时
 # 格子、间隙与圆角会一起变大（而不是“窗口大了、棋盘还是原来那么大”）。
 MAX_CELL_SIZE: Final[int] = 112
 # 相邻格子之间、以及格子与棋盘底板边缘之间的间隙：画出来就是“一块块分开的格子”。
 CELL_GAP: Final[int] = 6
-BOARD_RADIUS: Final[int] = 24
-CELL_RADIUS: Final[int] = 12
+# 棋盘底板与格子也跟着界面统一圆角，免得棋盘成为整屏里形状最“另类”的一块。
+BOARD_RADIUS: Final[int] = UI_RADIUS
+CELL_RADIUS: Final[int] = UI_RADIUS
 
 # 箭头在格子里的占比。两个比例都以**扣掉 CELL_GAP 之后的格子内边宽**为基准：
 #
@@ -100,13 +107,13 @@ GUIDE_LINE_HEAD: Final[float] = 11.0
 GUIDE_LINE_CAP: Final[float] = 13.0
 GUIDE_LINE_MARGIN: Final[float] = 5.0
 
-# 右下角的开关：一颗胶囊（左边文字 + 右边滑动开关）。
+# 右下角的开关：一块圆角栏（左边文字 + 右边滑动开关，见 :data:`UI_RADIUS`）。
 # 垂直留白比水平留白紧得多——最大的棋盘（6x6）最后一排格子一直铺到 y=674，
 # 开关必须在它下面落脚，所以底边只留 8px；右边缘按常规留白对齐。
 GUIDE_TOGGLE_SIZE: Final[tuple[int, int]] = (122, 32)
 GUIDE_TOGGLE_MARGIN: Final[tuple[int, int]] = (24, 8)
 GUIDE_TOGGLE_LABEL: Final[str] = "辅助线"
-# 胶囊内文字 / 轨道的留白，以及轨道的尺寸与滑块半径。
+# 开关内文字 / 轨道的留白，以及轨道的尺寸与滑块半径（轨道与滑块保持胶囊与正圆）。
 GUIDE_TOGGLE_PADDING: Final[int] = 12
 GUIDE_TOGGLE_TRACK_SIZE: Final[tuple[int, int]] = (36, 20)
 GUIDE_TOGGLE_KNOB_RADIUS: Final[int] = 7
@@ -137,11 +144,9 @@ SELECTION_RING_SCALE: Final[float] = 1.07
 SELECTION_PULSE_RATIO: Final[float] = 0.06
 
 # ------------------------------------------------------------------ 配色
-# 窗口背景：自上而下的竖直渐变，外加棋盘 / 主按钮背后的一团柔光。
-COLOR_BACKGROUND_TOP: Final[Color] = (30, 38, 58)
-COLOR_BACKGROUND_BOTTOM: Final[Color] = (10, 13, 21)
-COLOR_BACKGROUND_GLOW: Final[Color] = (62, 98, 170)
-GLOW_ALPHA: Final[int] = 88
+# 窗口背景：扁平化的**单一纯色**。原来这里是“竖直渐变 + 一团径向柔光”，
+# 扁平化之后画面的层次只由“块与块的明度差 + 1px 描边”表达，背景不再制造立体感。
+COLOR_BACKGROUND: Final[Color] = (16, 20, 30)
 
 COLOR_BOARD: Final[Color] = (28, 34, 48)
 # 棋盘底板的描边，避免深色棋盘在深色背景上“糊”成一片。
@@ -200,18 +205,14 @@ COLOR_MISTAKE_SPENT: Final[Color] = (52, 60, 82)
 # 破纪录时改用主色（金）强调整一下，见 `ui.draw_overlay`。
 COLOR_TIME: Final[Color] = (146, 202, 255)
 
-# 组件外观：投影、面板底色（渐变两端）与描边色，
-# 统计卡片、开始界面的“玩法”卡片以及各种按钮都由这几个色阶推出来。
-COLOR_SHADOW: Final[Color] = (3, 5, 9)
+# 组件外观：扁平化之后**一个角色只有一种颜色**——信息栏、统计分区、说明卡片、
+# 装饰圆牌与结算卡片共用 COLOR_PANEL + COLOR_PANEL_BORDER，不再有“渐变两端 + 投影”。
 COLOR_PANEL: Final[Color] = (36, 44, 63)
-COLOR_PANEL_DEEP: Final[Color] = (25, 31, 45)
 COLOR_PANEL_BORDER: Final[Color] = (62, 77, 108)
 
-# 次要按钮（深色）的渐变两端与悬停态。
-COLOR_BUTTON_TOP: Final[Color] = (54, 66, 92)
-COLOR_BUTTON_BOTTOM: Final[Color] = (38, 47, 67)
-COLOR_BUTTON_TOP_HOVER: Final[Color] = (70, 86, 118)
-COLOR_BUTTON_BOTTOM_HOVER: Final[Color] = (49, 61, 86)
+# 次要按钮（深色）：填充色与悬停态。悬停只换填充色，不做渐变 / 外发光 / 位移。
+COLOR_BUTTON: Final[Color] = (54, 66, 92)
+COLOR_BUTTON_HOVER: Final[Color] = (70, 86, 118)
 COLOR_BUTTON_BORDER: Final[Color] = (88, 106, 142)
 COLOR_BUTTON_TEXT: Final[Color] = (233, 238, 248)
 
@@ -220,9 +221,8 @@ COLOR_PRIMARY: Final[Color] = (255, 196, 74)
 COLOR_ON_PRIMARY: Final[Color] = (38, 28, 8)
 
 # 结算覆盖层：遮罩、卡片，以及通关 / 失败两种强调色。
+# 遮罩保留——它是“本关结束了”的功能反馈而不是装饰；卡片与其它面板共用 COLOR_PANEL。
 COLOR_OVERLAY: Final[Color] = (8, 11, 18)
 OVERLAY_ALPHA: Final[int] = 200
-COLOR_CARD_TOP: Final[Color] = (40, 49, 70)
-COLOR_CARD_BOTTOM: Final[Color] = (25, 31, 45)
 COLOR_SUCCESS: Final[Color] = (108, 220, 156)
 COLOR_FAILURE: Final[Color] = (238, 92, 92)

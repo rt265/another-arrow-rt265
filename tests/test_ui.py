@@ -515,13 +515,129 @@ def test_menu_pages_are_visually_distinct() -> None:
     assert pygame.image.tobytes(start, "RGB") != pygame.image.tobytes(about, "RGB")
 
 
-def test_draw_background_paints_a_top_to_bottom_gradient() -> None:
+def test_draw_background_paints_one_flat_color() -> None:
+    """扁平化之后背景是一块纯色：四角与中心必须完全一致。
+
+    原来这里是“竖直渐变 + 径向柔光”，层次改由“块与块的明度差 + 1px 描边”表达之后，
+    背景不再参与制造立体感，这条测试就是那次改动的判据。
+    """
     surface = _surface()
     ui.draw_background(surface)
 
-    top = surface.get_at((4, 4))[:3]
-    bottom = surface.get_at((4, config.WINDOW_HEIGHT - 4))[:3]
-    assert sum(top) > sum(bottom), "背景应当自上而下由亮转暗"
+    corners = (
+        (2, 2),
+        (config.WINDOW_WIDTH - 3, 2),
+        (2, config.WINDOW_HEIGHT - 3),
+        (config.WINDOW_WIDTH - 3, config.WINDOW_HEIGHT - 3),
+        (config.WINDOW_WIDTH // 2, config.WINDOW_HEIGHT // 2),
+    )
+    for corner in corners:
+        assert surface.get_at(corner)[:3] == config.COLOR_BACKGROUND, corner
+
+
+# ---------------------------------------------------------------- 扁平化
+
+
+def test_hud_is_one_bar_with_three_dividers() -> None:
+    """信息栏是一条通栏：整条铺底色 + 底边一条横线，四段分区之间用竖线隔开。
+
+    扁平化之前这里是四块各自带描边的卡片。现在栏内只有“一条底 + 三条线”，
+    因此分区自身不再有边框，栏外也不会出现栏的底色。
+    """
+    surface = _surface()
+    surface.fill(config.COLOR_BACKGROUND)
+    ui.draw_hud(surface, _session())
+
+    bar = ui.hud_rect()
+    # 整条栏都铺上了底色。
+    assert surface.get_at((bar.left + 1, bar.centery))[:3] == config.COLOR_PANEL
+    assert surface.get_at((bar.right - 2, bar.top + 2))[:3] == config.COLOR_PANEL
+    # 底边是一条描边色的横线，线下面立刻回到背景色。
+    assert (
+        surface.get_at((bar.centerx, bar.bottom - 1))[:3] == config.COLOR_PANEL_BORDER
+    )
+    assert surface.get_at((bar.centerx, bar.bottom))[:3] == config.COLOR_BACKGROUND
+
+    dividers = ui.hud_dividers()
+    sections = ui.hud_chip_rects()
+    assert len(dividers) == len(sections) - 1
+    for (x, top, bottom), (previous, current) in zip(
+        dividers, itertools.pairwise(sections), strict=True
+    ):
+        assert previous.right < x < current.left, "分隔线落在相邻两段分区的空隙里"
+        assert bar.top < top < bottom < bar.bottom
+        assert surface.get_at((x, (top + bottom) // 2))[:3] == config.COLOR_PANEL_BORDER
+
+
+def test_chrome_components_are_flat_without_shadow_or_gradient() -> None:
+    """组件只有“纯色填充 + 1px 描边”：外侧没有投影，内部没有渐变。
+
+    投影是扁平化删掉的第一件事——旧实现会在按钮外侧叠 4 层深色；
+    渐变则会让同一行出现多种填充色。
+    """
+    surface = _surface()
+    surface.fill(config.COLOR_BACKGROUND)
+    ui.draw_hud(surface, _session())
+
+    button = ui.restart_button_rect()
+    # 1) 紧贴按钮外侧的像素必须正好是信息栏自己的底色。
+    for point in (
+        (button.left - 2, button.centery),
+        (button.right + 1, button.centery),
+        (button.centerx, button.top - 2),
+        (button.centerx, button.bottom + 1),
+    ):
+        assert surface.get_at(point)[:3] == config.COLOR_PANEL, point
+
+    # 2) 贴着上边缘、避开左右圆角与按钮文字的一条横线只有一种颜色。
+    fills = {
+        surface.get_at((x, button.top + 2))[:3]
+        for x in range(button.left + 20, button.right - 20)
+    }
+    assert fills == {config.COLOR_BUTTON}
+
+
+def test_buttons_share_one_corner_radius() -> None:
+    """按钮不再按高度取一半做成胶囊，而是与其它组件同一档圆角。
+
+    胶囊的两肩会鼓出来，因此“距左边缘 1/4 圆角、距上边缘 2/3 圆角”这个点
+    落在统一圆角之内、却在胶囊之外。改回 ``rect.height // 2`` 时这条会报警。
+    """
+    surface = _surface()
+    surface.fill(config.COLOR_BACKGROUND)
+    ui.draw_hud(surface, _session())
+
+    radius = viewport.s(config.UI_RADIUS)
+    for button in (ui.restart_button_rect(), ui.hud_home_button_rect()):
+        shoulder = (button.left + radius // 4, button.top + 2 * radius // 3)
+        assert surface.get_at(shoulder)[:3] == config.COLOR_BUTTON, shoulder
+        corner = (button.left + 1, button.top + 1)
+        assert surface.get_at(corner)[:3] == config.COLOR_PANEL, "四角要被圆角切掉"
+
+
+def test_menu_title_has_no_glow_copy() -> None:
+    """菜单页标题只有一层文字，不再在下面垫一份半透明的金色副本。
+
+    判据：标题所在的那几行只能是“文字色 ↔ 背景色”之间的过渡（各通道按同一比例变化），
+    金色副本混进背景后红色分量会明显偏高，一眼就能分辨。
+    """
+    surface = _surface()
+    ui.draw_start_screen(surface, _session())
+
+    title = ui._TEXT_HERO.font().render(ui._GAME_TITLE, True, config.COLOR_TEXT)
+    rect = title.get_rect(
+        center=(config.WINDOW_WIDTH // 2, viewport.y(ui._PAGE_TITLE_Y))
+    )
+    back = config.COLOR_BACKGROUND
+    text = config.COLOR_TEXT
+    for y in range(rect.top, min(rect.bottom + 5, config.WINDOW_HEIGHT)):
+        for x in range(rect.left, rect.right):
+            pixel = surface.get_at((x, y))[:3]
+            ratios = [
+                (pixel[index] - back[index]) / (text[index] - back[index])
+                for index in range(3)
+            ]
+            assert max(ratios) - min(ratios) <= 0.06, (x, y, pixel)
 
 
 # ---------------------------------------------------------------- 窗口缩放

@@ -271,8 +271,7 @@ class Game:
     def _draw(self) -> None:
         mouse = pygame.mouse.get_pos()
         if self.scene is Scene.PLAYING:
-            # 柔光跟着棋盘走，让棋盘看起来是画面的视觉中心。
-            ui.draw_background(self.screen, self.session.board.rect.center)
+            ui.draw_background(self.screen)
             # 鼠标位置交给棋盘：辅助线打开时，指着的那条会更亮。
             self.session.board.draw(self.screen, mouse, show_guides=self.show_guides)
             ui.draw_ui(self.screen, self.session, mouse, show_guides=self.show_guides)
