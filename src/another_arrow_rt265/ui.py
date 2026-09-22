@@ -400,7 +400,7 @@ def settings_page(music_enabled: bool, sound_enabled: bool) -> MenuPage:
 def _weight_fallbacks(
     weight: resources.FontWeight,
 ) -> tuple[resources.FontWeight, ...]:
-    """返回字重的降级顺序：想要的那个 → 常规字重（少了 Light 也不至于没字可用）。"""
+    """返回字重的降级顺序：想要的那个 → 常规字重。"""
     if weight == resources.DEFAULT_WEIGHT:
         return (resources.DEFAULT_WEIGHT,)
     return (weight, resources.DEFAULT_WEIGHT)
@@ -413,12 +413,10 @@ def _font(
     """按“字号 + 字重”取字体（带缓存）。
 
     优先使用随程序分发的静态字重（``assets/fonts/NotoSansCJKsc-<字重>.otf``，见
-    :func:`resources.font_path`）：这样界面文字在任何机器上都长一个样，不依赖别人装没装
-    中文字体。这个字重的文件缺失时先退回常规字重，再退回系统的中文字体；再没有就退回
-    pygame 内置字体，此时中文会显示为占位方块，但界面结构依旧完整。
+    :func:`resources.font_path`）；这个字重的文件缺失时先退回常规字重，再退回系统
+    的中文字体；再没有就退回 pygame 内置字体，此时中文会显示为占位方块，但界面结构依旧完整。
 
-    缓存有上限（而不是 ``functools.cache``）：窗口自由缩放后字号是连续变化的，
-    无上限的缓存会随着拖拽一路长下去。
+    缓存有上限（而不是 ``functools.cache``）
     """
     if not pygame.font.get_init():
         pygame.font.init()
