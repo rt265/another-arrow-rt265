@@ -11,7 +11,7 @@
 ├─docs # 相关文档
 ├─src
 │  └─another_arrow_rt265 # 源代码
-│     └─assets # 静态资源（随程序打包的字体等）
+│     └─assets # 静态资源
 ├─tests # 测试
 └─pyproject.toml 项目信息与依赖
 ```
@@ -23,4 +23,4 @@ Agent 需要将本轮对话做出的改动汇总为 Markdown 文档，存储在 
 ## Copyright Notice
 
 - 不得使用参考游戏的任何资源
-- 如果（需要）引入第三方来源的素材，请在[THIRD-PARTY](THIRD-PARTY.md)中说明
+- 所有第三方素材合规性由开发者处理，Agent 只需要调用资源
