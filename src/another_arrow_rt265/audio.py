@@ -13,6 +13,12 @@
 游戏能不能玩不取决于声音，因此这里不抛异常，只用返回值 / :attr:`Audio.loaded_cues`
 告诉调用方“这一声到底响了没有”。
 
+音频还可以**分别关掉**（事项 17）：:attr:`Audio.music_enabled` 与
+:attr:`Audio.sound_enabled` 就是“设置”界面里那两个开关，关掉之后
+:meth:`Audio.play` 与 :meth:`Audio.start_music` 直接返回 ``False``——静音是
+在**播放层**拦下的，所以界面代码不必到处写 ``if 声音开着``。两个开关只活在
+本次运行里（不落盘），关掉程序后恢复默认的“两项都开”。
+
 音效与界面动作是**一对一**的：:class:`Cue` 的每个成员都对应 ``assets/sounds/`` 里的
 一个文件（枚举值就是文件主名），由 ``tests/test_audio.py`` 与 ``tests/test_resources.py``
 钉住“声明的每一声都有实物”。本模块只依赖 pygame 的混音器、不碰窗口，因此可以单独测。
@@ -55,7 +61,8 @@ class Audio:
     """随程序分发的背景音乐与音效的播放器。
 
     构造时初始化混音器并载入素材；任何一步失败都只是“没有声音”，不影响游戏逻辑。
-    音量来自 :mod:`another_arrow_rt265.config`，音乐与音效各一条。
+    音量来自 :mod:`another_arrow_rt265.config`，音乐与音效各一条；两个播放开关
+    （:attr:`music_enabled` / :attr:`sound_enabled`）默认都开着。
     """
 
     def __init__(
@@ -72,6 +79,8 @@ class Audio:
         """
         self._sounds: dict[Cue, pygame.mixer.Sound] = {}
         self._music_ready = False
+        self._music_enabled = True
+        self._sound_enabled = True
         self._music_volume = music_volume
         self._sound_volume = sound_volume
         self._load()
@@ -86,13 +95,39 @@ class Audio:
         """背景音乐是否装载好、可以播放。"""
         return self._music_ready
 
+    @property
+    def music_enabled(self) -> bool:
+        """背景音乐是否允许播放（“设置”界面里的音乐开关）。"""
+        return self._music_enabled
+
+    @music_enabled.setter
+    def music_enabled(self, enabled: bool) -> None:
+        """开关背景音乐：关掉立刻停，打开立刻从头续上。"""
+        self._music_enabled = enabled
+        if enabled:
+            self.start_music()
+        else:
+            self.stop_music()
+
+    @property
+    def sound_enabled(self) -> bool:
+        """音效是否允许播放（“设置”界面里的音效开关）。"""
+        return self._sound_enabled
+
+    @sound_enabled.setter
+    def sound_enabled(self, enabled: bool) -> None:
+        """开关音效：只记状态，不需要停什么（音效都是短音，播完就没了）。"""
+        self._sound_enabled = enabled
+
     def play(self, cue: Cue) -> bool:
         """播放一个音效。
 
         Returns:
-            是否真的响了。``False`` 表示这一声对应的素材没载入成功（缺文件、无声卡
-            或格式不支持），调用方照常往下走即可。
+            是否真的响了。``False`` 有三种情形：音效开关关着、这一声的素材没载入成功
+            （缺文件、无声卡或格式不支持）。调用方照常往下走即可。
         """
+        if not self._sound_enabled:
+            return False
         sound = self._sounds.get(cue)
         if sound is None:
             return False
@@ -103,10 +138,12 @@ class Audio:
         """开始循环播放背景音乐。
 
         Returns:
-            本次调用是否真的起了播放。已经在播时返回 ``False`` 并且**从头重播也不会发生**
-            ——这个方法可以放心地重复调用。
+            本次调用是否真的起了播放。已经在播、或者音乐开关关着时返回 ``False``，
+            并且**从头重播也不会发生**——这个方法可以放心地重复调用。
         """
-        if not self._music_ready or pygame.mixer.music.get_busy():
+        if not self._music_enabled or not self._music_ready:
+            return False
+        if pygame.mixer.music.get_busy():
             return False
         pygame.mixer.music.play(loops=-1)
         return True

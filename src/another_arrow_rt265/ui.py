@@ -12,8 +12,9 @@
 
 窗口一共有四类画面：
 
-- 菜单页：大标题 + 副标题 +（可选）方向箭头装饰 +（可选）主按钮 + 若干说明卡片
-  + 提示行 + 页脚按钮。开始界面与关于界面都是菜单页，只是内容不同；
+- 菜单页：大标题 + 副标题 +（可选）方向箭头装饰 +（可选）主按钮+ 若干开关行
+  + 若干说明卡片 + 提示行 + 页脚按钮。开始界面、关于界面与设置界面都是菜单页，
+  只是内容不同；
 - 进行中：一条整宽信息栏（左侧“回到主界面”、中间四段统计分区、右侧“重新开始”
   按钮，分区之间用 1px 竖直分隔线隔开，见 :func:`draw_hud`），加上右下角
   “辅助线”开关（见 :func:`draw_guide_toggle`）；
@@ -22,10 +23,10 @@
 - 通关 / 失败：叠加遮罩与卡片（正文下方额外报一下本关用时），
   底部并排“回到主界面”与主按钮（下一关 / 重试本关 / 再来一轮）。
 
-菜单页的“接口”是 :class:`MenuPage`：页面用数据描述自己有哪些说明卡片与按钮，
-排版、绘制与命中判定都由 :func:`menu_layout` 统一算出来；按钮不直接绑定行为，
+菜单页的“接口”是 :class:`MenuPage`：页面用数据描述自己有哪些开关行、说明卡片与按钮，
+排版、绘制与命中判定都由 :func:`menu_layout` 统一算出来；开关与按钮不直接绑定行为，
 只声明一个动作名，由 :meth:`~another_arrow_rt265.game.Game._run_action` 分发。
-因此**新增一个界面（关卡选择、设置……）只需要写一个 :class:`MenuPage` 常量，
+因此**新增一个界面（关卡选择……）只需要写一个 :class:`MenuPage` 常量，
 再在动作表里补一行**，不必再写一遍排版、绘制与事件分发代码。
 
 组件的视觉效果统一由 :func:`_draw_panel` / :func:`_draw_primary_button` /
@@ -151,9 +152,10 @@ _OVERLAY_BUTTON_SIZE: Final[tuple[int, int]] = (196, 56)
 _OVERLAY_BUTTON_GAP: Final[int] = 16
 _OVERLAY_BUTTON_MARGIN: Final[int] = 34
 
-# 菜单页（开始 / 关于，以及后续新增的同类页面）：自上而下依次是
-# 大标题 → 副标题 →（可选）方向箭头装饰 →（可选）主按钮 → 说明卡片 → 提示行
-# → 页脚按钮。页脚按钮贴着页面底部排，因此各页面的“返回 / 次要入口”总在同一个位置。
+# 菜单页（开始 / 关于 / 设置，以及后续新增的同类页面）：自上而下依次是
+# 大标题 → 副标题 →（可选）方向箭头装饰 →（可选）主按钮 → 开关行 → 说明卡片
+# → 提示行 → 页脚按钮。页脚按钮贴着页面底部排，因此各页面的“返回 / 次要入口”
+# 总在同一条线上。
 _GAME_TITLE: Final[str] = "一箭又一箭"
 _GAME_SUBTITLE: Final[str] = "ANOTHER ARROW"
 _PAGE_TITLE_Y: Final[int] = 126
@@ -195,6 +197,12 @@ _SECTION_FIRST_LINE_TOP: Final[int] = 66
 _SECTION_LINE_HEIGHT: Final[int] = 30
 _SECTION_TEXT_HEIGHT: Final[int] = 24
 _SECTION_BOTTOM_PADDING: Final[int] = 8
+
+# 设置界面里的开关行：与说明卡片同宽的一条圆角栏（左边文字 + 右边滑动开关），
+# 但矮一截，因为行里只有一行字；文字缩进与卡片的小标题对齐，
+# 因此“开关行 + 卡片”竖着排下来左边缘是齐的。
+_PAGE_TOGGLE_HEIGHT: Final[int] = 72
+_PAGE_TOGGLE_PADDING: Final[int] = _SECTION_PADDING
 
 # 教程提示条（只出现在第 1 关）：左侧是“第几步 / 共几步”，中间一句话指引，
 # 右侧是“跳过教程”；同时给待点击的箭头套一圈呼吸高亮，把“点哪里”直接画出来。
@@ -239,10 +247,10 @@ class MenuButtonPlacement(Enum):
     """按钮在菜单页上的位置。"""
 
     HERO = "hero"
-    """主按钮：方向箭头装饰下方、说明卡片之前。"""
+    """主按钮：方向箭头装饰下方、开关行与说明卡片之前。"""
 
     FOOTER = "footer"
-    """页脚按钮：说明卡片之后，整排居中并贴住页面底部留白。"""
+    """页脚按钮：整页内容的最后一行，整排居中并贴住页面底部留白。"""
 
 
 @dataclass(frozen=True)
@@ -263,12 +271,28 @@ class MenuButton:
 
 
 @dataclass(frozen=True)
+class MenuToggle:
+    """菜单页上的一个开关行：左边文字、右边滑动开关（组件见 :func:`_draw_switch_row`）。
+
+    与 :class:`MenuButton` 一样只声明“做什么 + 长什么样”：``action`` 交给
+    ``Game._run_action`` 分发，``enabled`` 只是**当前取值**（决定开关画成开还是关）。
+    因此页面描述是“内容 + 当前状态”，状态一变就重新生成一个页面——参见
+    :func:`settings_page` 的入参。
+    """
+
+    action: str
+    label: str
+    enabled: bool
+
+
+@dataclass(frozen=True)
 class MenuPage:
     """一个菜单页的内容描述（排版由 :func:`menu_layout` 统一算出来）。"""
 
     title: str
     subtitle: str
     sections: tuple[MenuSection, ...] = ()
+    toggles: tuple[MenuToggle, ...] = ()
     buttons: tuple[MenuButton, ...] = ()
     decorations: bool = False
     hint: str | None = None
@@ -286,6 +310,7 @@ class MenuLayout:
     """一个菜单页算好的骨架坐标（绘制与命中判定共用同一份结果）。"""
 
     sections: tuple[pygame.Rect, ...]
+    toggles: tuple[tuple[MenuToggle, pygame.Rect], ...]
     hint: pygame.Rect | None
     buttons: tuple[tuple[MenuButton, pygame.Rect], ...]
 
@@ -295,7 +320,8 @@ def start_page(total_levels: int, max_mistakes: int) -> MenuPage:
     """返回开始界面的页面描述。
 
     开始界面刻意不放任何文字说明：规则改由第 1 关的交互式教程边玩边教
-    （见 :func:`draw_tutorial`），屏幕只留标题、方向箭头装饰与两个按钮。
+    （见 :func:`draw_tutorial`），屏幕只留标题、方向箭头装饰与三个入口
+    （主按钮“开始游戏” + 页脚的“设置 / 关于”）。
 
     Args:
         total_levels: 关卡总数。开始界面不展示这个数字（关卡进度只在信息栏里出现），
@@ -313,6 +339,7 @@ def start_page(total_levels: int, max_mistakes: int) -> MenuPage:
                 primary=True,
                 placement=MenuButtonPlacement.HERO,
             ),
+            MenuButton("settings", "设置", icons.Icon.SETTINGS),
             MenuButton("about", "关于", icons.Icon.INFO),
         ),
         decorations=True,
@@ -345,6 +372,28 @@ def about_page(total_levels: int, max_mistakes: int) -> MenuPage:
             ),
         ),
         buttons=(MenuButton("home", "返回主界面", icons.Icon.HOME),),
+    )
+
+
+@functools.cache
+def settings_page(music_enabled: bool, sound_enabled: bool) -> MenuPage:
+    """返回“设置”界面的页面描述。
+
+    两个开关的**当前取值属于页面内容**（它决定开关画成开还是关），因此从入参传进来，
+    由 ``functools.cache`` 给四种组合各留一份。
+
+    Args:
+        music_enabled: 背景音乐当前是否打开。
+        sound_enabled: 音效当前是否打开。
+    """
+    return MenuPage(
+        title="设置",
+        subtitle="SETTINGS",
+        toggles=(
+            MenuToggle("toggle-music", "背景音乐", music_enabled),
+            MenuToggle("toggle-sound", "音效", sound_enabled),
+        ),
+        buttons=(MenuButton("settings-back", "返回", icons.Icon.BACK),),
     )
 
 
@@ -650,16 +699,20 @@ def guide_toggle_rect() -> pygame.Rect:
     )
 
 
-def _guide_toggle_track_rect() -> pygame.Rect:
-    """返回开关轨道的区域（贴在胶囊右侧、垂直居中）。"""
-    pill = guide_toggle_rect()
-    width, height = viewport.scaled(config.GUIDE_TOGGLE_TRACK_SIZE)
+def _switch_track_rect(row: pygame.Rect, padding: int) -> pygame.Rect:
+    """返回滑动开关轨道的区域（贴在 ``row`` 右侧、垂直居中）。"""
+    width, height = viewport.scaled(config.SWITCH_TRACK_SIZE)
     return pygame.Rect(
-        pill.right - viewport.s(config.GUIDE_TOGGLE_PADDING) - width,
-        pill.centery - height // 2,
+        row.right - viewport.s(padding) - width,
+        row.centery - height // 2,
         width,
         height,
     )
+
+
+def _guide_toggle_track_rect() -> pygame.Rect:
+    """返回右下角“辅助线”开关轨道的区域。"""
+    return _switch_track_rect(guide_toggle_rect(), config.SWITCH_PADDING)
 
 
 def start_button_rect() -> pygame.Rect:
@@ -667,13 +720,33 @@ def start_button_rect() -> pygame.Rect:
     return viewport.map(_hero_row_rects(1)[0])
 
 
+def _home_footer_rects() -> tuple[pygame.Rect, pygame.Rect]:
+    """开始界面页脚的两个入口 ``(设置, 关于)``（设计坐标）。
+
+    开始界面是唯一一个有**两个**页脚按钮的页面：主入口“开始游戏”占着主按钮的位置，
+    两个次要入口（设置 / 关于）并排贴底，回到主界面时不会找不到它们。
+    """
+    settings, about = _footer_row_rects(2)
+    return (settings, about)
+
+
+def settings_button_rect() -> pygame.Rect:
+    """返回开始界面页脚“设置”按钮的区域。"""
+    return viewport.map(_home_footer_rects()[0])
+
+
 def about_button_rect() -> pygame.Rect:
     """返回开始界面页脚“关于”按钮的区域。"""
-    return viewport.map(_footer_row_rects(1)[0])
+    return viewport.map(_home_footer_rects()[1])
 
 
 def about_back_button_rect() -> pygame.Rect:
     """返回“关于”界面页脚“返回主界面”按钮的区域。"""
+    return viewport.map(_footer_row_rects(1)[0])
+
+
+def settings_back_button_rect() -> pygame.Rect:
+    """返回“设置”界面页脚“返回”按钮的区域。"""
     return viewport.map(_footer_row_rects(1)[0])
 
 
@@ -687,6 +760,25 @@ def _stack_sections(
     for index, section in enumerate(sections):
         cursor += _PAGE_SECTION_GAP if index else 0
         rect = pygame.Rect(left, cursor, _SECTION_WIDTH, section.height)
+        rects.append(rect)
+        cursor = rect.bottom
+    return tuple(rects)
+
+
+def _stack_toggles(
+    toggles: tuple[MenuToggle, ...], top: int
+) -> tuple[pygame.Rect, ...]:
+    """把开关行自上而下排开，返回它们的区域（设计坐标）。
+
+    与 :func:`_stack_sections` 同一套排法（宽度、间距、起点都一样），只是行高固定，
+    因此“开关行 + 说明卡片”竖着排下来是一条整齐的栏。
+    """
+    left = (config.WINDOW_WIDTH - _SECTION_WIDTH) // 2
+    rects: list[pygame.Rect] = []
+    cursor = top
+    for index, _ in enumerate(toggles):
+        cursor += _PAGE_SECTION_GAP if index else 0
+        rect = pygame.Rect(left, cursor, _SECTION_WIDTH, _PAGE_TOGGLE_HEIGHT)
         rects.append(rect)
         cursor = rect.bottom
     return tuple(rects)
@@ -727,17 +819,18 @@ def menu_layout(page: MenuPage) -> MenuLayout:
     视口映射到屏幕，因此窗口缩放时各块之间的比例与相对位置不会变。
 
     绘制（:func:`draw_menu_page`）与命中判定（``Game._handle_menu_click``）都读
-    这一份结果，因此按钮画在哪里就能点在哪里，不会两边各算一遍而错位。
+    这一份结果，因此开关 / 按钮画在哪里就能点在哪里，不会两边各算一遍而错位。
     """
     hero = tuple(b for b in page.buttons if b.placement is MenuButtonPlacement.HERO)
     footer = tuple(b for b in page.buttons if b.placement is MenuButtonPlacement.FOOTER)
 
-    sections = _stack_sections(
-        page.sections, _PAGE_SECTIONS_TOP if hero else _PAGE_SECTIONS_TOP_PLAIN
-    )
+    top = _PAGE_SECTIONS_TOP if hero else _PAGE_SECTIONS_TOP_PLAIN
+    toggle_rects = _stack_toggles(page.toggles, top)
+    sections_top = toggle_rects[-1].bottom + _PAGE_SECTION_GAP if toggle_rects else top
+    sections = _stack_sections(page.sections, sections_top)
     hint = None
     if page.hint is not None:
-        bottom = sections[-1].bottom if sections else _PAGE_SECTIONS_TOP_PLAIN
+        bottom = sections[-1].bottom if sections else sections_top
         hint = pygame.Rect(
             (config.WINDOW_WIDTH - _SECTION_WIDTH) // 2,
             bottom + _PAGE_HINT_GAP,
@@ -758,6 +851,10 @@ def menu_layout(page: MenuPage) -> MenuLayout:
             footer_index += 1
     return MenuLayout(
         sections=tuple(viewport.map(rect) for rect in sections),
+        toggles=tuple(
+            (toggle, viewport.map(rect))
+            for toggle, rect in zip(page.toggles, toggle_rects, strict=True)
+        ),
         hint=None if hint is None else viewport.map(hint),
         buttons=tuple(buttons),
     )
@@ -959,64 +1056,94 @@ def draw_hud(
     )
 
 
-def draw_guide_toggle(
+def _draw_switch_row(
     surface: pygame.Surface,
+    row: pygame.Rect,
+    label: str,
     enabled: bool,
     mouse: tuple[int, int] | None = None,
+    *,
+    style: _TextStyle = _TEXT_BUTTON,
+    padding: int = config.SWITCH_PADDING,
 ) -> None:
-    """绘制右下角的“辅助线”开关：一块圆角栏（左边文字 + 右边滑动开关）。
+    """画一行“左边文字 + 右边滑动开关”。
 
-    辅助线是可选功能，因此开关必须**自己说明自己当前的档位**：
-    关着时轨道是暗灰、文字也是灰的；打开后轨道换成辅助线“畅通”的青绿色、文字提亮，
-    和棋盘上那些线是同一件事的两种说法。悬停时整块提亮（与旁边的按钮同一套外观）。
+    这是“开关”这个组件的**唯一定义**：右下角的“辅助线”开关与“设置”界面里的
+    “背景音乐 / 音效”两行都走它，因此轨道尺寸、滑块半径、开 / 关配色只有一份，
+    不会两边各画一套（两处只有字号的差别，由 ``style`` 传进来）。
+
+    开关必须**自己说明自己当前的档位**：关着时轨道是暗灰、文字也是灰的；打开后轨道
+    换成强调色的青绿、文字提亮，悬停时整块提亮（与旁边的按钮同一套外观）。
 
     Args:
         surface: 绘制目标。
-        enabled: 辅助线当前是否打开。
+        row: 整行（或整块胶囊）的区域。
+        label: 左侧文字。
+        enabled: 当前是开还是关。
         mouse: 鼠标位置，仅用于悬停高亮。
+        style: 左侧文字的字号与字重。
+        padding: 文字与轨道的左右留白（设计长度）。
     """
-    pill = guide_toggle_rect()
-    track = _guide_toggle_track_rect()
-    hovered = mouse is not None and pill.collidepoint(mouse)
+    hovered = mouse is not None and row.collidepoint(mouse)
     lit = hovered or enabled
 
     _draw_panel(
         surface,
-        pill,
+        row,
         config.COLOR_BUTTON_HOVER if lit else config.COLOR_BUTTON,
         radius=viewport.s(config.UI_RADIUS),
         border=config.COLOR_BUTTON_BORDER,
     )
 
-    label = _TEXT_LABEL.font().render(
-        config.GUIDE_TOGGLE_LABEL,
-        True,
-        config.COLOR_TEXT if enabled else config.COLOR_TEXT_MUTED,
+    text = style.font().render(
+        label, True, config.COLOR_TEXT if enabled else config.COLOR_TEXT_MUTED
     )
     surface.blit(
-        label,
-        (
-            pill.left + viewport.s(config.GUIDE_TOGGLE_PADDING),
-            pill.centery - label.get_height() // 2,
-        ),
+        text, (row.left + viewport.s(padding), row.centery - text.get_height() // 2)
     )
 
     # 轨道与滑块保持“胶囊 + 正圆”：它们是开关语义，不受统一圆角约束。
+    track = _switch_track_rect(row, padding)
     sprites.blit_round_rect(
         surface,
         track,
         track.height // 2,
-        config.GUIDE_TOGGLE_TRACK_ON if enabled else config.GUIDE_TOGGLE_TRACK_OFF,
+        config.SWITCH_TRACK_ON if enabled else config.SWITCH_TRACK_OFF,
     )
     # 滑块靠向哪一侧就是“开 / 关”的第二个信号（颜色之外再给一层冗余表达）。
-    radius = viewport.s(config.GUIDE_TOGGLE_KNOB_RADIUS)
+    radius = viewport.s(config.SWITCH_KNOB_RADIUS)
     margin = (track.height - 2 * radius) // 2
     knob_x = track.right - radius - margin if enabled else track.left + radius + margin
     sprites.blit_circle(
         surface,
         (knob_x, track.centery),
         radius,
-        config.GUIDE_TOGGLE_KNOB_ON if enabled else config.GUIDE_TOGGLE_KNOB_OFF,
+        config.SWITCH_KNOB_ON if enabled else config.SWITCH_KNOB_OFF,
+    )
+
+
+def draw_guide_toggle(
+    surface: pygame.Surface,
+    enabled: bool,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """绘制右下角的“辅助线”开关（与设置里的开关同一个组件，只是小一号）。
+
+    辅助线是可选功能，因此开关必须自己说明当前档位；具体画法见
+    :func:`_draw_switch_row`。
+
+    Args:
+        surface: 绘制目标。
+        enabled: 辅助线当前是否打开。
+        mouse: 鼠标位置，仅用于悬停高亮。
+    """
+    _draw_switch_row(
+        surface,
+        guide_toggle_rect(),
+        config.GUIDE_TOGGLE_LABEL,
+        enabled,
+        mouse,
+        style=_TEXT_LABEL,
     )
 
 
@@ -1340,6 +1467,8 @@ def draw_menu_page(
         _draw_arrow_row(surface)
 
     layout = menu_layout(page)
+    for toggle, rect in layout.toggles:
+        _draw_menu_toggle(surface, rect, toggle, mouse)
     for rect, section in zip(layout.sections, page.sections, strict=True):
         _draw_section_panel(surface, rect, section)
     if layout.hint is not None and page.hint is not None:
@@ -1358,12 +1487,30 @@ def draw_start_screen(
 
     Args:
         surface: 绘制目标。
-        session: 当前会话，页脚提示行用它报出关卡总数与失误次数上限。
+        session: 当前会话；页面内容目前与它无关（关卡总数与失误上限只在信息栏里
+            出现），入参先与其它画面保持同形。
         mouse: 鼠标位置，仅用于按钮的悬停高亮。
     """
     draw_menu_page(
         surface, start_page(session.total_levels, session.max_mistakes), mouse
     )
+
+
+def draw_settings_screen(
+    surface: pygame.Surface,
+    music_enabled: bool,
+    sound_enabled: bool,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """绘制“设置”界面（页面内容见 :func:`settings_page`）。
+
+    Args:
+        surface: 绘制目标。
+        music_enabled: 背景音乐开关的当前状态。
+        sound_enabled: 音效开关的当前状态。
+        mouse: 鼠标位置，仅用于开关行的悬停高亮。
+    """
+    draw_menu_page(surface, settings_page(music_enabled, sound_enabled), mouse)
 
 
 def draw_about_screen(
@@ -1487,6 +1634,24 @@ def _draw_menu_button(
         )
     else:
         _draw_secondary_button(surface, rect, button.text, mouse, icon=button.icon)
+
+
+def _draw_menu_toggle(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    toggle: MenuToggle,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """画菜单页上的一个开关行（文字大一些，与卡片正文同一套排版）。"""
+    _draw_switch_row(
+        surface,
+        rect,
+        toggle.label,
+        toggle.enabled,
+        mouse,
+        style=_TEXT_BUTTON,
+        padding=_PAGE_TOGGLE_PADDING,
+    )
 
 
 def _result_message(session: Session) -> str:

@@ -38,6 +38,13 @@
 声音是**旁白而不是规则**：本模块只负责“看见了什么就响哪一声”，
 :mod:`another_arrow_rt265.session` / :mod:`another_arrow_rt265.board` 对音频一无所知，
 所以没有声卡时（headless、CI）整套逻辑照常跑，只是安静一点。
+
+**设置界面**（事项 17）也只是一张菜单页：两个开关（背景音乐 / 音效）由
+:meth:`Game.toggle_music` / :meth:`Game.toggle_sound` 改 :attr:`Game.audio` 上的开关位，
+页面描述则按当前取值重新生成（见 :meth:`Game._menu_page`）。它可以从开始界面的页脚按钮
+或游戏中的 ``S`` 键打开，并且**记得自己是从哪儿来的**：除了回开始界面，它还能回游戏，
+回去时关卡进度、失误、计时与教程进度都不变（见 :meth:`show_settings` /
+:meth:`leave_settings`）。
 """
 
 from __future__ import annotations
@@ -58,7 +65,10 @@ class Scene(Enum):
     """开始界面：等待玩家点击“开始游戏”，此时不响应棋盘点击。"""
 
     ABOUT = "about"
-    """关于界面：玩法、操作与制作信息，只有一个“返回主界面”按钮。"""
+    """关于界面：制作信息，只有一个“返回主界面”按钮。"""
+
+    SETTINGS = "settings"
+    """设置界面：音乐 / 音效两个开关，页脚“返回”回到打开它的那个画面。"""
 
     PLAYING = "playing"
     """游戏画面：棋盘、信息栏与结算卡片（结算状态由 ``Session`` 决定）。"""
@@ -85,6 +95,10 @@ class Game:
         self.clock = pygame.time.Clock()
         self.running = True
         self.scene = Scene.START
+        # 设置界面是从哪儿打开的（见 `show_settings` / `leave_settings`）：
+        # 从开始界面进去就回开始界面，从游戏里进去就回游戏，**不碰会话**，
+        # 因此中途进去调一下声音不会丢掉正在解的这一关。
+        self._return_scene = Scene.START
         # 背景音乐从窗口打开放到程序退出：它不区分画面，也不再重播（start_music 幂等）。
         self.audio = audio.Audio() if audio_player is None else audio_player
         self.audio.start_music()
@@ -173,14 +187,46 @@ class Game:
         """切到“关于”界面（返回主界面走 :meth:`return_to_start`）。"""
         self.scene = Scene.ABOUT
 
+    def show_settings(self) -> None:
+        """打开“设置”界面（记下是从哪个画面进来的，返回时回到原处）。
+
+        已经在设置界面里就什么也不做，因此“进 / 出”不会因为重复触发而错乱。
+        """
+        if self.scene is Scene.SETTINGS:
+            return
+        self._return_scene = self.scene
+        self.scene = Scene.SETTINGS
+
+    def leave_settings(self) -> None:
+        """关闭“设置”界面，回到打开它的那个画面。
+
+        与会话无关：从游戏里进来时，关卡、失误、计时与教程进度都原封不动地留着
+        （设置界面不是“开始”画面，不会走 :meth:`return_to_start` 那条重置路径）。
+        关卡计时也只在进行中的画面上走字，因此进来翻开关不会计时。
+        """
+        if self.scene is not Scene.SETTINGS:
+            return
+        self.scene = self._return_scene
+
+    def toggle_music(self) -> None:
+        """开关背景音乐（关掉立刻停，打开立刻从头续上）。"""
+        self.audio.music_enabled = not self.audio.music_enabled
+
+    def toggle_sound(self) -> None:
+        """开关音效（静音是在播放层拦下的，界面代码不必到处判断）。"""
+        self.audio.sound_enabled = not self.audio.sound_enabled
+
     def _menu_page(self) -> ui.MenuPage:
-        """返回当前菜单页的页面描述（只在开始 / 关于这类菜单画面上调用）。
+        """返回当前菜单页的页面描述（只在开始 / 关于 / 设置这类菜单画面上调用）。
 
         关卡总数与失误上限取自会话，所以“关于”界面里的数字与开始界面页脚
-        提示行是同一个口径。
+        提示行是同一个口径；设置界面的入参则是两个开关的**当前状态**，
+        因此状态一变，页面描述（也就是开关画成开还是关）跟着变。
         """
         if self.scene is Scene.ABOUT:
             return ui.about_page(self.session.total_levels, self.session.max_mistakes)
+        if self.scene is Scene.SETTINGS:
+            return ui.settings_page(self.audio.music_enabled, self.audio.sound_enabled)
         return ui.start_page(self.session.total_levels, self.session.max_mistakes)
 
     def _handle_events(self) -> None:
@@ -256,8 +302,18 @@ class Game:
         self._sync_audio_status()
 
     def _handle_menu_click(self, position: tuple[int, int]) -> None:
-        """把点击派给当前菜单页上声明过的按钮（绘制与命中判定共用同一份坐标）。"""
-        for button, rect in ui.menu_layout(self._menu_page()).buttons:
+        """把点击派给当前菜单页上声明过的开关与按钮。
+
+        开关行排在按钮之前：两者在页面上不重叠，但“点了开关就只切开关”这条语义
+        应当写在前面（以后调排版压到一起时也不会变成点开关却退出了页面）。
+        绘制与命中判定共用 :func:`ui.menu_layout` 的同一份坐标。
+        """
+        layout = ui.menu_layout(self._menu_page())
+        for toggle, rect in layout.toggles:
+            if rect.collidepoint(position):
+                self._run_action(toggle.action)
+                return
+        for button, rect in layout.buttons:
             if rect.collidepoint(position):
                 self._run_action(button.action)
                 return
@@ -265,8 +321,9 @@ class Game:
     def _handle_key(self, key: int) -> None:
         """处理按键：``Esc`` 退出，``Enter`` / 空格触发主按钮，``H`` 回主界面。
 
-        ``H`` 在菜单页与游戏画面都生效；``R``、``G`` 与左右方向键只在游戏画面生效，
-        免得在开始界面误触改掉进度或开关（``G`` 与右下角那颗开关是同一个开关）。
+        ``H`` 与 ``S`` 在任何画面上都生效（``S`` 是设置界面的开关：开着就关上、
+        关着就打开）；``R``、``G`` 与左右方向键只在游戏画面生效，免得在开始界面
+        误触改掉进度或开关（``G`` 与右下角那颗开关是同一个开关）。
         这些快捷键等价于按了某个按钮，因此同样响一声音效；``Esc`` 除外（它只是关窗口），
         以及在游戏进行中按 Enter / 空格——那下什么也没发生，不该给反馈。
         """
@@ -277,6 +334,8 @@ class Game:
         elif key == pygame.K_h:
             self.audio.play(audio.Cue.BUTTON)
             self.return_to_start()
+        elif key == pygame.K_s:
+            self._toggle_settings()
         elif self.scene is Scene.PLAYING:
             if key == pygame.K_r:
                 self.audio.play(audio.Cue.BUTTON)
@@ -290,6 +349,14 @@ class Game:
             elif key == pygame.K_RIGHT:
                 self.audio.play(audio.Cue.BUTTON)
                 self.session.load_level(self.session.level_index + 1)
+
+    def _toggle_settings(self) -> None:
+        """``S`` 键：在“设置 / 来处”两个画面之间切换（与页脚按钮同一条路径）。"""
+        self.audio.play(audio.Cue.BUTTON)
+        if self.scene is Scene.SETTINGS:
+            self.leave_settings()
+        else:
+            self.show_settings()
 
     def _run_primary_action(self) -> None:
         """执行当前画面的主按钮动作（按钮点击与 Enter / 空格共用入口）。
@@ -314,10 +381,11 @@ class Game:
             self._run_action(action)
 
     def _run_action(self, action: str) -> None:
-        """执行菜单动作（分发前先放一声音效——菜单上的按钮都点得动）。
+        """执行菜单动作（分发前先放一声音效——菜单上的开关与按钮都点得动）。
 
-        这是界面与逻辑之间唯一的接口：``ui`` 里的按钮只声明动作名，具体做什么
-        都在这个表里。新增一个界面时，把它的按钮动作补到这里即可。
+        这是界面与逻辑之间唯一的接口：``ui`` 里的开关与按钮只声明动作名，具体做什么
+        都在这个表里（开关的“切换”也只是一个动作：状态存在窗口上，不在页面上）。
+        新增一个界面时，把它的开关 / 按钮动作补到这里即可。
 
         Raises:
             KeyError: 动作名没有登记（通常是按钮写错了 ``action``）。
@@ -326,6 +394,10 @@ class Game:
             "start": self.start,
             "about": self.show_about,
             "home": self.return_to_start,
+            "settings": self.show_settings,
+            "settings-back": self.leave_settings,
+            "toggle-music": self.toggle_music,
+            "toggle-sound": self.toggle_sound,
         }
         handler = actions.get(action)
         if handler is None:
@@ -343,6 +415,13 @@ class Game:
             ui.draw_ui(self.screen, self.session, mouse, show_guides=self.show_guides)
         elif self.scene is Scene.ABOUT:
             ui.draw_about_screen(self.screen, self.session, mouse)
+        elif self.scene is Scene.SETTINGS:
+            ui.draw_settings_screen(
+                self.screen,
+                self.audio.music_enabled,
+                self.audio.sound_enabled,
+                mouse,
+            )
         else:
             ui.draw_start_screen(self.screen, self.session, mouse)
         pygame.display.flip()

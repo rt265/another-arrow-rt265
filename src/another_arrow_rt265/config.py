@@ -113,16 +113,20 @@ GUIDE_LINE_MARGIN: Final[float] = 5.0
 GUIDE_TOGGLE_SIZE: Final[tuple[int, int]] = (122, 32)
 GUIDE_TOGGLE_MARGIN: Final[tuple[int, int]] = (24, 8)
 GUIDE_TOGGLE_LABEL: Final[str] = "辅助线"
-# 开关内文字 / 轨道的留白，以及轨道的尺寸与滑块半径（轨道与滑块保持胶囊与正圆）。
-GUIDE_TOGGLE_PADDING: Final[int] = 12
-GUIDE_TOGGLE_TRACK_SIZE: Final[tuple[int, int]] = (36, 20)
-GUIDE_TOGGLE_KNOB_RADIUS: Final[int] = 7
-# 开关轨道与滑块的配色：打开后轨道取辅助线的“畅通”色，
-# 因此“开关是绿的”与“棋盘上那些绿线”是同一件事的两种说法。
-GUIDE_TOGGLE_TRACK_ON: Final[Color] = GUIDE_LINE_COLOR_CLEAR
-GUIDE_TOGGLE_TRACK_OFF: Final[Color] = (52, 60, 82)
-GUIDE_TOGGLE_KNOB_ON: Final[Color] = (240, 246, 255)
-GUIDE_TOGGLE_KNOB_OFF: Final[Color] = (128, 141, 168)
+
+# ------------------------------------------------------------------ 滑动开关
+# 开关是界面里唯一保留“胶囊 + 正圆”的形状（见 UI_RADIUS 的例外说明），也是**共享组件**：
+# 右下角的“辅助线”开关与“设置”界面里的“背景音乐 / 音效”两行都由它画成。
+# 因此“开着”在哪儿都是同一个绿、“关着”都是同一块暗灰，不会再出现两套相近的绿色。
+SWITCH_TRACK_SIZE: Final[tuple[int, int]] = (36, 20)
+SWITCH_KNOB_RADIUS: Final[int] = 7
+# 开关左右两端的留白：文字与窗口（或所在行的）边界之间、轨道与另一侧边界之间。
+SWITCH_PADDING: Final[int] = 12
+# 打开后轨道取辅助线的“畅通”色：开关是绿的与棋盘上那些绿线是同一件事的两种说法。
+SWITCH_TRACK_ON: Final[Color] = GUIDE_LINE_COLOR_CLEAR
+SWITCH_TRACK_OFF: Final[Color] = (52, 60, 82)
+SWITCH_KNOB_ON: Final[Color] = (240, 246, 255)
+SWITCH_KNOB_OFF: Final[Color] = (128, 141, 168)
 
 # ------------------------------------------------------------------ 反馈
 # 撞到其他箭头时的闪烁提示持续时间（秒）。

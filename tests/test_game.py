@@ -296,7 +296,13 @@ def test_every_declared_menu_action_is_wired() -> None:
     """菜单页声明的动作都要登记在动作表里：加了按钮却忘了接线会在这里报错。"""
     game = Game()
 
-    for page in (ui.start_page(3, 3), ui.about_page(3, 3)):
+    for page in (
+        ui.start_page(3, 3),
+        ui.about_page(3, 3),
+        ui.settings_page(True, True),
+    ):
+        for toggle in page.toggles:
+            game._run_action(toggle.action)
         for button in page.buttons:
             game._run_action(button.action)
 
@@ -630,12 +636,15 @@ class _RecordingAudio(Audio):
     """只记账不发声的 :class:`Audio`：用来断言“这个动作应该响哪一声”。
 
     它是 ``Audio`` 的子类（而不是一个长得像的对象），这样把替身塞给 ``Game`` 时
-    类型上没有歧义；故意不调用 ``super().__init__()``——真实现一构造就会去读素材。
+    类型上没有歧义；构造时照常走真实现（混音器与素材都是真的，只是没人听），
+    因此句柄、音量、两个开关这些真逻辑都还在，只有 ``play`` / ``start_music``
+    被换成记账。
     """
 
     def __init__(self) -> None:
         self.played: list[Cue] = []
         self.music_starts = 0
+        super().__init__()
 
     def play(self, cue: Cue) -> bool:
         self.played.append(cue)
@@ -812,3 +821,144 @@ def test_enter_while_playing_is_silent(
     """游戏进行中按 Enter 什么也没发生，那么就不该有反馈声。"""
     _post_key(sound_game, pygame.K_RETURN)
     assert silent.played == []
+
+
+# ---------------------------------------------------------------- 设置界面
+
+
+def _settings_switch_rects() -> tuple[pygame.Rect, pygame.Rect]:
+    """返回设置界面上两个开关行的区域 ``(音乐, 音效)``（绘制与命中判定同源）。"""
+    rects = [rect for _, rect in ui.menu_layout(ui.settings_page(True, True)).toggles]
+    assert len(rects) == 2
+    return (rects[0], rects[1])
+
+
+def test_start_screen_settings_button_opens_the_settings_screen() -> None:
+    game = Game()
+    _post_click(game, ui.settings_button_rect().center)
+    assert game.scene is Scene.SETTINGS
+
+
+def test_settings_back_button_returns_to_the_start_screen() -> None:
+    game = Game()
+    _post_click(game, ui.settings_button_rect().center)
+    _post_click(game, ui.settings_back_button_rect().center)
+    assert game.scene is Scene.START
+
+
+def test_enter_leaves_the_settings_screen() -> None:
+    """设置页的页脚按钮就是它的默认动作，因此 Enter / 空格也能退出。"""
+    game = Game()
+    _post_click(game, ui.settings_button_rect().center)
+    _post_key(game, pygame.K_RETURN)
+    assert game.scene is Scene.START
+
+
+def test_settings_key_works_on_every_screen() -> None:
+    """``S`` 是设置界面的开关：开着就关上、关着就打开，开始界面与游戏里都生效。"""
+    game = Game()
+    _post_key(game, pygame.K_s)
+    assert game.scene is Scene.SETTINGS
+    _post_key(game, pygame.K_s)
+    assert game.scene is Scene.START
+
+    game.start()
+    _post_key(game, pygame.K_s)
+    assert game.scene is Scene.SETTINGS
+    _post_key(game, pygame.K_s)
+    assert game.scene is Scene.PLAYING
+
+
+def test_settings_switches_flip_the_audio_flags() -> None:
+    """两个开关各自改自己的那一位，互不影响。"""
+    game = Game()
+    music, sound = _settings_switch_rects()
+    _post_key(game, pygame.K_s)
+
+    _post_click(game, music.center)
+    assert game.audio.music_enabled is False
+    assert game.audio.sound_enabled is True, "关音乐不该顺手把音效也关了"
+
+    _post_click(game, sound.center)
+    assert game.audio.sound_enabled is False
+
+    _post_click(game, music.center)
+    assert game.audio.music_enabled is True
+
+
+def test_settings_open_in_game_keep_the_level_progress(game: Game) -> None:
+    """中途进设置不丢进度：回来时关卡、箭头、失误与用时都原封不动。"""
+    session = game.session
+    session.load_level(1)
+    board = session.board
+    arrow = next(arrow for arrow in board.arrows if board.is_path_clear(arrow))
+    _post_click(game, board.cell_rect(arrow.row, arrow.col).center)
+    game._update(0.5)
+
+    arrows_left = session.arrows_left
+    mistakes = session.mistakes_left
+    elapsed = session.elapsed
+    assert arrows_left == board.remaining
+
+    _post_key(game, pygame.K_s)
+    assert game.scene is Scene.SETTINGS
+    game._draw()
+    # 设置界面不属于“进行中”，停留多久都不计入关卡用时。
+    game._update(1.0)
+
+    _post_click(game, ui.settings_back_button_rect().center)
+    assert game.scene is Scene.PLAYING
+    assert session.level_number == 2
+    assert session.arrows_left == arrows_left
+    assert session.mistakes_left == mistakes
+    assert session.elapsed == pytest.approx(elapsed)
+
+
+def test_settings_screen_ignores_board_clicks_and_in_game_shortcuts(
+    game: Game,
+) -> None:
+    session = game.session
+    initial = session.arrows_left
+    # 点说明卡片（既不压开关也不压按钮的那一块）不该落到棋盘上。
+    card = ui.menu_layout(ui.settings_page(True, True)).sections[0]
+    _post_key(game, pygame.K_s)
+
+    _post_click(game, card.center)
+    _post_key(game, pygame.K_r)
+    _post_key(game, pygame.K_RIGHT)
+
+    assert game.scene is Scene.SETTINGS
+    assert session.level_number == 1
+    assert session.arrows_left == initial
+    assert session.mistakes_left == session.max_mistakes
+
+
+def test_settings_switches_play_the_click_sound(silent: _RecordingAudio) -> None:
+    game = Game(audio_player=silent)
+    music, _ = _settings_switch_rects()
+
+    _post_click(game, ui.settings_button_rect().center)
+    _post_click(game, music.center)
+
+    assert silent.played == [Cue.BUTTON, Cue.BUTTON]
+    assert game.audio.music_enabled is False
+
+
+def test_audio_switches_survive_a_level_change(game: Game) -> None:
+    """开关是窗口级的偏好：换关、重开本关、回主界面都不会被重置（设置页上写了这句）。"""
+    game.audio.music_enabled = False
+    game.audio.sound_enabled = False
+
+    game.session.restart_level()
+    game.session.advance()
+    game.return_to_start()
+
+    assert game.audio.music_enabled is False
+    assert game.audio.sound_enabled is False
+
+
+def test_draw_renders_the_settings_frame() -> None:
+    game = Game()
+    _post_key(game, pygame.K_s)
+    game._draw()
+    assert game.scene is Scene.SETTINGS

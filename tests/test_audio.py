@@ -65,6 +65,54 @@ def test_music_is_quieter_than_the_sound_effects() -> None:
     assert 0.0 < config.MUSIC_VOLUME < config.SOUND_VOLUME <= 1.0
 
 
+# ---------------------------------------------------------------- 音乐 / 音效开关
+
+
+def test_both_switches_start_on() -> None:
+    """默认两项都开：没动过设置或关掉程序重开时就是有声音的。"""
+    player = audio.Audio()
+
+    assert player.music_enabled is True
+    assert player.sound_enabled is True
+
+
+def test_turning_the_sound_effects_off_silences_play() -> None:
+    """音效开关是在播放层拦下的：关掉之后 ``play`` 一律不响。"""
+    player = audio.Audio()
+    player.sound_enabled = False
+
+    for cue in audio.Cue:
+        assert player.play(cue) is False, cue
+
+    player.sound_enabled = True
+    assert player.play(audio.Cue.BUTTON) is True, "打开之后照旧能响"
+
+
+def test_turning_the_music_off_stops_it_and_turning_it_back_on_restarts_it() -> None:
+    player = audio.Audio()
+    player.stop_music()
+    assert player.start_music() is True
+
+    player.music_enabled = False
+    assert pygame.mixer.music.get_busy() is False, "关掉音乐应当立刻停下来"
+    assert player.start_music() is False, "音乐开关关着时不该能起播"
+
+    player.music_enabled = True
+    assert pygame.mixer.music.get_busy() is True, "打开后应当马上续上"
+
+
+def test_the_sound_switch_does_not_touch_the_music() -> None:
+    """两个开关互不影响：这是设置页上写死的那句话。"""
+    player = audio.Audio()
+    player.stop_music()
+    player.start_music()
+
+    player.sound_enabled = False
+
+    assert player.music_enabled is True
+    assert pygame.mixer.music.get_busy() is True
+
+
 # ---------------------------------------------------------------- 优雅退化
 
 

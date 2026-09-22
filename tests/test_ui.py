@@ -26,6 +26,14 @@ CROSS_LEVEL: Level = (
     ".^.",
 )
 
+#: 几张菜单页：布局类测试逐张跑一遍，新页面加进来就自动被覆盖。
+MENU_PAGES = (
+    ui.start_page(3, 3),
+    ui.about_page(3, 3),
+    ui.settings_page(True, True),
+    ui.settings_page(False, False),
+)
+
 
 def _session() -> Session:
     """创建一个只有一关（因此也是最后一关）的会话。"""
@@ -183,8 +191,8 @@ def test_guide_toggle_content_fits_inside_the_pill() -> None:
 
     assert pill.contains(track)
     assert track.centery == pill.centery
-    assert label.get_width() + config.GUIDE_TOGGLE_PADDING <= track.left - pill.left
-    assert 2 * config.GUIDE_TOGGLE_KNOB_RADIUS + 2 <= track.height, "滑块要放得进轨道"
+    assert label.get_width() + config.SWITCH_PADDING <= track.left - pill.left
+    assert 2 * config.SWITCH_KNOB_RADIUS + 2 <= track.height, "滑块要放得进轨道"
 
 
 def test_start_button_is_centered_above_the_footer_button() -> None:
@@ -196,6 +204,17 @@ def test_start_button_is_centered_above_the_footer_button() -> None:
     # 主按钮位于画面中上部，且不压到页脚的“关于”。
     assert button.centery < config.WINDOW_HEIGHT * 0.6
     assert button.bottom < footer.top
+
+
+def test_start_screen_footer_holds_the_settings_and_about_buttons() -> None:
+    """开始界面页脚是两个次要入口：设置与关于左右并排、整行居中，且不压主按钮。"""
+    settings = ui.settings_button_rect()
+    about = ui.about_button_rect()
+
+    assert settings.right < about.left, "两个入口不重叠"
+    assert settings.left + about.right == config.WINDOW_WIDTH, "整行居中"
+    assert 0 <= settings.left and about.right <= config.WINDOW_WIDTH
+    assert ui.start_button_rect().bottom < settings.top
 
 
 def test_start_screen_keeps_no_rule_text() -> None:
@@ -234,10 +253,10 @@ def test_about_screen_only_lists_credits() -> None:
 
 
 def test_menu_pages_stack_their_blocks_inside_the_window() -> None:
-    """菜单页的每一块内容（卡片 / 提示行 / 按钮）都要落在窗口里且互不重叠。"""
-    for page in (ui.start_page(3, 3), ui.about_page(3, 3)):
+    """菜单页的每一块内容（开关 / 卡片 / 提示行 / 按钮）都要落在窗口里且互不重叠。"""
+    for page in MENU_PAGES:
         layout = ui.menu_layout(page)
-        blocks = list(layout.sections)
+        blocks = [*(rect for _, rect in layout.toggles), *layout.sections]
         if layout.hint is not None:
             blocks.append(layout.hint)
         blocks.extend(rect for _, rect in layout.buttons)
@@ -253,28 +272,39 @@ def test_menu_pages_stack_their_blocks_inside_the_window() -> None:
             assert not previous.colliderect(current), f"{page.title} 上有内容重叠"
 
 
-def test_menu_pages_share_the_same_footer_button_spot() -> None:
-    """两个菜单页的页脚按钮落在同一位置，返回 / 次要入口不会跳来跳去。"""
-    about = ui.about_button_rect()
-    back = ui.about_back_button_rect()
+def test_menu_pages_put_their_footer_buttons_on_the_same_row() -> None:
+    """各页的页脚按钮贴着同一条底线、整行居中：“设置 / 关于 / 返回”不会跳来跳去。"""
+    rows: list[list[pygame.Rect]] = []
+    for page in MENU_PAGES:
+        rects = [
+            rect
+            for button, rect in ui.menu_layout(page).buttons
+            if button.placement is ui.MenuButtonPlacement.FOOTER
+        ]
+        assert rects, page.title
+        assert rects[0].left + rects[-1].right == config.WINDOW_WIDTH, page.title
+        rows.append(rects)
 
-    assert about == back
-    assert about.centerx == config.WINDOW_WIDTH // 2
-    assert about.bottom <= config.WINDOW_HEIGHT
+    bottoms = {rect.bottom for rects in rows for rect in rects}
+    assert len(bottoms) == 1, "各页的页脚按钮应该落在同一行"
+    assert bottoms.pop() <= config.WINDOW_HEIGHT
 
 
 def test_menu_page_buttons_come_from_the_page_description() -> None:
-    """页面描述的按钮与菜单页实际可点的区域一一对应（绘制与命中判定同源）。"""
+    """页面描述的开关 / 按钮与菜单页实际可点的区域一一对应（绘制与命中判定同源）。"""
     layout = ui.menu_layout(ui.start_page(3, 3))
     actions = {button.action for button, _ in layout.buttons}
 
-    assert actions == {"start", "about"}
+    assert actions == {"start", "settings", "about"}
     assert ui.menu_layout(ui.about_page(3, 3)).buttons[0][0].action == "home"
+    assert ui.menu_layout(ui.settings_page(True, False)).buttons[0][0].action == (
+        "settings-back"
+    )
 
 
 def test_menu_page_text_fits_inside_its_section() -> None:
     """卡片的每一行都要放得下：卡片宽度是按最宽的一行定的，加字前先看这里。"""
-    for page in (ui.start_page(3, 3), ui.about_page(99, 9)):
+    for page in (*MENU_PAGES, ui.about_page(99, 9)):
         for rect, section in zip(
             ui.menu_layout(page).sections, page.sections, strict=True
         ):
@@ -289,6 +319,108 @@ def test_menu_page_text_fits_inside_its_section() -> None:
                 assert label.get_width() + 2 * ui._SECTION_PADDING + 22 <= rect.width, (
                     line
                 )
+
+
+# ---------------------------------------------------------------- 设置界面
+
+
+def test_settings_page_has_one_switch_per_preference() -> None:
+    """设置页就是两个开关（音乐 / 音效）：动作名与当前取值都如实来自入参。"""
+    page = ui.settings_page(music_enabled=False, sound_enabled=True)
+
+    assert [toggle.action for toggle in page.toggles] == [
+        "toggle-music",
+        "toggle-sound",
+    ]
+    assert [toggle.label for toggle in page.toggles] == ["背景音乐", "音效"]
+    assert [toggle.enabled for toggle in page.toggles] == [False, True]
+    assert [button.action for button in page.buttons] == ["settings-back"]
+
+
+def test_settings_page_switch_states_reach_the_layout() -> None:
+    """页面描述里的取值会原样传到布局结果里：绘制与命中判定读的是同一份。"""
+    layout = ui.menu_layout(ui.settings_page(music_enabled=True, sound_enabled=False))
+    music, sound = layout.toggles
+
+    assert [(toggle.action, toggle.enabled) for toggle, _ in layout.toggles] == [
+        ("toggle-music", True),
+        ("toggle-sound", False),
+    ]
+    # 两行开关左对齐、宽度一致，并且都排在说明卡片上面。
+    assert music[1].left == sound[1].left
+    assert music[1].width == sound[1].width
+    assert sound[1].bottom < layout.sections[0].top
+
+
+def test_settings_switches_reuse_the_guide_toggle_component() -> None:
+    """两处开关是同一个组件：轨道尺寸与滑块与右下角那颗开关完全一致。"""
+    row = ui.menu_layout(ui.settings_page(True, True)).toggles[0][1]
+    track = ui._switch_track_rect(row, ui._PAGE_TOGGLE_PADDING)
+
+    assert track.size == ui._guide_toggle_track_rect().size
+    assert track.centery == row.centery
+    assert row.contains(track), "轨道要落在开关行里"
+
+
+def test_settings_page_hint_points_at_the_in_game_shortcut() -> None:
+    """设置页的提示行负责两件“元信息”：游戏里怎么再打开、设置能活多久。"""
+    hint = ui.settings_page(True, True).hint
+
+    assert hint is not None, "设置页要有页脚提示行"
+    assert "S" in hint, "游戏里用 S 打开这一页，这个入口得写在页面上"
+    assert "关闭程序" in hint, "设置不落盘，页面应当说明这一点"
+
+
+def test_menu_page_hint_fits_inside_its_box() -> None:
+    """提示行是居中画的，放不下就会溢出窗口：加字前先看这里。"""
+    for page in MENU_PAGES:
+        if page.hint is None:
+            continue
+        rect = ui.menu_layout(page).hint
+        assert rect is not None
+
+        label = ui._TEXT_HINT.font().render(page.hint, True, config.COLOR_TEXT_MUTED)
+        assert label.get_width() <= rect.width, page.hint
+
+
+def test_draw_settings_screen_renders_without_error() -> None:
+    surface = _surface()
+    row = ui.menu_layout(ui.settings_page(True, True)).toggles[0][1]
+
+    ui.draw_settings_screen(surface, True, True)
+    ui.draw_settings_screen(surface, False, False)
+    ui.draw_settings_screen(surface, True, False, row.center)
+
+
+def test_draw_settings_screen_shows_both_switch_positions() -> None:
+    """两行开关各自跟着自己的取值：音乐开着时音效仍然可以是关的。"""
+    music, sound = (
+        rect for _, rect in ui.menu_layout(ui.settings_page(True, True)).toggles
+    )
+
+    on = _surface()
+    ui.draw_settings_screen(on, True, False)
+    off = _surface()
+    ui.draw_settings_screen(off, False, True)
+
+    assert _color_hits(on, config.SWITCH_TRACK_ON, music) > 0, "音乐开着时轨道是青绿色"
+    assert _color_hits(on, config.SWITCH_TRACK_OFF, sound) > 0, "音效关着时轨道是暗灰"
+    assert _color_hits(off, config.SWITCH_TRACK_ON, music) == 0
+    assert _color_hits(off, config.SWITCH_TRACK_OFF, music) > 0
+    assert pygame.image.tobytes(on, "RGB") != pygame.image.tobytes(off, "RGB")
+
+
+def test_draw_settings_screen_covers_the_whole_window() -> None:
+    surface = _surface()
+    surface.fill((255, 0, 255))
+
+    ui.draw_settings_screen(surface, True, True)
+
+    assert surface.get_at((2, 2))[:3] != (255, 0, 255)
+    assert surface.get_at((config.WINDOW_WIDTH - 3, 2))[:3] != (255, 0, 255)
+    assert surface.get_at((2, config.WINDOW_HEIGHT - 3))[:3] != (255, 0, 255), (
+        "设置界面应该连背景一起画，不留未覆盖的角落"
+    )
 
 
 # ---------------------------------------------------------------- 文案
@@ -400,9 +532,9 @@ def test_draw_guide_toggle_shows_both_positions() -> None:
     off = _surface()
     ui.draw_guide_toggle(off, False)
 
-    assert _color_hits(on, config.GUIDE_TOGGLE_TRACK_ON, pill) > 0, "打开后轨道是青绿色"
-    assert _color_hits(off, config.GUIDE_TOGGLE_TRACK_OFF, pill) > 0, "关着时轨道是暗灰"
-    assert _color_hits(off, config.GUIDE_TOGGLE_TRACK_ON, pill) == 0
+    assert _color_hits(on, config.SWITCH_TRACK_ON, pill) > 0, "打开后轨道是青绿色"
+    assert _color_hits(off, config.SWITCH_TRACK_OFF, pill) > 0, "关着时轨道是暗灰"
+    assert _color_hits(off, config.SWITCH_TRACK_ON, pill) == 0
     assert pygame.image.tobytes(on, "RGB") != pygame.image.tobytes(off, "RGB")
 
 
@@ -423,7 +555,7 @@ def test_guide_toggle_knob_edges_are_anti_aliased() -> None:
     “轨道色 + 滑块色”两种颜色。
     """
     surface = _surface()
-    surface.fill(config.GUIDE_TOGGLE_TRACK_OFF)
+    surface.fill(config.SWITCH_TRACK_OFF)
     ui.draw_guide_toggle(surface, False)
 
     box = ui._guide_toggle_track_rect().inflate(-12, -6)
@@ -432,8 +564,8 @@ def test_guide_toggle_knob_edges_are_anti_aliased() -> None:
         for x in range(box.left, box.right)
         for y in range(box.top, box.bottom)
     }
-    assert config.GUIDE_TOGGLE_TRACK_OFF in colors
-    assert config.GUIDE_TOGGLE_KNOB_OFF in colors
+    assert config.SWITCH_TRACK_OFF in colors
+    assert config.SWITCH_KNOB_OFF in colors
     assert len(colors) > 2, "滑块边缘没有过渡色，说明又画成了硬边"
 
 
@@ -504,15 +636,19 @@ def test_draw_about_screen_covers_the_whole_window() -> None:
 
 
 def test_menu_pages_are_visually_distinct() -> None:
-    """两张菜单页的内容不同，不能画出同一张图（防止画错页面）。"""
-    start = _surface()
-    about = _surface()
+    """几张菜单页的内容不同，不能画出同一张图（防止画错页面）。"""
     session = _session()
+    rendered = []
+    for draw in (
+        lambda surface: ui.draw_start_screen(surface, session),
+        lambda surface: ui.draw_about_screen(surface, session),
+        lambda surface: ui.draw_settings_screen(surface, True, True),
+    ):
+        surface = _surface()
+        draw(surface)
+        rendered.append(pygame.image.tobytes(surface, "RGB"))
 
-    ui.draw_start_screen(start, session)
-    ui.draw_about_screen(about, session)
-
-    assert pygame.image.tobytes(start, "RGB") != pygame.image.tobytes(about, "RGB")
+    assert len(set(rendered)) == len(rendered)
 
 
 def test_draw_background_paints_one_flat_color() -> None:
@@ -686,9 +822,13 @@ def test_menu_pages_stay_centred_and_inside_the_design_box(
     """菜单页的各块仍然居中、不越界：排版算的是设计坐标，最后统一映射。"""
     box = window.rect(0, 0, *config.WINDOW_SIZE)
 
-    for page in (ui.start_page(6, 3), ui.about_page(6, 3)):
+    for page in MENU_PAGES:
         layout = ui.menu_layout(page)
-        blocks = [*layout.sections, *(rect for _, rect in layout.buttons)]
+        blocks = [
+            *(rect for _, rect in layout.toggles),
+            *layout.sections,
+            *(rect for _, rect in layout.buttons),
+        ]
         if layout.hint is not None:
             blocks.append(layout.hint)
         for rect in blocks:

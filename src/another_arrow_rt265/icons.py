@@ -28,6 +28,9 @@ from another_arrow_rt265 import config, sprites
 # 环形箭头的采样段数：段数越多弧越圆滑，24 段在按钮尺寸下已经看不出折线。
 _ARC_STEPS: Final[int] = 24
 
+# 齿轮的齿数：8 是“一眼看出是齿轮”的下限，再多在小尺寸下会糊成一圈刺。
+_GEAR_TEETH: Final[int] = 8
+
 # 图标贴图的缓存上限：尺寸（跟着窗口缩放）+ 颜色（按钮的几种配色）合起来条目有限。
 _CACHE_SIZE: Final[int] = 64
 
@@ -43,6 +46,12 @@ class Icon(Enum):
 
     NEXT = "next"
     """右箭头：开始游戏 / 进入下一关。"""
+
+    BACK = "back"
+    """左箭头（右箭头的镜像）：从子页面返回上一级。"""
+
+    SETTINGS = "settings"
+    """齿轮：打开“设置”界面。"""
 
     INFO = "info"
     """信息：打开“关于”界面。"""
@@ -103,6 +112,10 @@ def _draw(
         _draw_restart(surface, center, size, color)
     elif icon is Icon.NEXT:
         _draw_next(surface, center, size, color)
+    elif icon is Icon.BACK:
+        _draw_back(surface, center, size, color)
+    elif icon is Icon.SETTINGS:
+        _draw_settings(surface, center, size, color)
     else:
         _draw_info(surface, center, size, color)
 
@@ -267,4 +280,79 @@ def _draw_next(
             (center_x - half * 0.05, center_y - half * 0.62),
             (center_x - half * 0.05, center_y + half * 0.62),
         ),
+    )
+
+
+def _draw_back(
+    surface: pygame.Surface,
+    center: tuple[float, float],
+    size: float,
+    color: config.Color,
+) -> None:
+    """左箭头：``Icon.NEXT`` 的水平镜像（子页面上的“返回”）。
+
+    两个图标共用同一套比例，只是方向相反，因此并排出现（“下一关 / 返回”）时
+    笔画粗细与长度完全一致，不会一个胖一个瘦。
+    """
+    center_x, center_y = center
+    half = size / 2.0
+    stroke = _stroke_width(size)
+
+    pygame.draw.line(
+        surface,
+        color,
+        (center_x + half * 0.92, center_y),
+        (center_x - half * 0.05, center_y),
+        width=stroke,
+    )
+    pygame.draw.polygon(
+        surface,
+        color,
+        (
+            (center_x - half, center_y),
+            (center_x + half * 0.05, center_y - half * 0.62),
+            (center_x + half * 0.05, center_y + half * 0.62),
+        ),
+    )
+
+
+def _draw_settings(
+    surface: pygame.Surface,
+    center: tuple[float, float],
+    size: float,
+    color: config.Color,
+) -> None:
+    """设置：一个齿轮（一圈粗环 + 八颗往外伸的齿）。
+
+    齿用粗短线画，端点自然是圆头，看起来像是从轮体上“挤”出来的；小尺寸下
+    比逐齿拼多边形要干净。环与齿在半径方向上有交叠（0.55 ~ 0.88 与 0.62），
+    因此二者总是连在一起，不会因为线宽取整而断开。
+    """
+    center_x, center_y = center
+    half = size / 2.0
+    stroke = _stroke_width(size)
+    tooth_width = max(2, round(stroke * 1.4))
+
+    for index in range(_GEAR_TEETH):
+        angle = math.tau * index / _GEAR_TEETH
+        pygame.draw.line(
+            surface,
+            color,
+            (
+                center_x + math.cos(angle) * half * 0.55,
+                center_y + math.sin(angle) * half * 0.55,
+            ),
+            (
+                center_x + math.cos(angle) * half * 0.88,
+                center_y + math.sin(angle) * half * 0.88,
+            ),
+            width=tooth_width,
+        )
+
+    pygame.draw.circle(
+        surface,
+        color,
+        (round(center_x), round(center_y)),
+        round(half * 0.62),
+        width=stroke,
     )
