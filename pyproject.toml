@@ -37,6 +37,10 @@ standalone = true
 output-dir = "build/nuitka"
 # 允许 Nuitka 自动下载并缓存辅助工具（首次打包需要 depends.exe 检测 DLL）。
 assume-yes-for-downloads = true
+# 自带素材（字体）不需要在这里声明：它们放在包内（src/another_arrow_rt265/assets/），
+# --project 会自动加 --include-package-data=another_arrow_rt265 把它们搬进产物。
+# 反过来，用 include-data-dir 指向包外的目录会被 --project 判为“多余的数据文件”而打包失败
+# （uv_build 只会把包内文件与 .data 目录放进 wheel，包外的 assets/ 不在 wheel 里）。
 # 游戏是 GUI 程序，运行时不要弹出黑色控制台窗口。
 windows-console-mode = "disable"
 # 项目未使用这些可选依赖，显式排除以免 Nuitka 反复报告“找不到模块”。

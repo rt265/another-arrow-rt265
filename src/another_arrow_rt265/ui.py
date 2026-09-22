@@ -37,11 +37,13 @@ from typing import Final
 
 import pygame
 
-from another_arrow_rt265 import config, icons, tutorial
+from another_arrow_rt265 import config, icons, resources, tutorial
 from another_arrow_rt265.direction import Direction
 from another_arrow_rt265.session import GameStatus, Session
 
-# 优先匹配系统自带的 CJK 字体，避免界面文字渲染成方块。
+# 界面文字统一使用随程序分发的 Noto Sans CJK SC（见 resources.font_path()），
+# 下面这份名单只是“字体文件缺失”时的兜底：按名字匹配系统自带的 CJK 字体，
+# 免得退化成方块字。
 _FONT_CANDIDATES: Final[tuple[str, ...]] = (
     "microsoftyaheiui",
     "microsoftyahei",
@@ -303,13 +305,18 @@ def about_page(total_levels: int, max_mistakes: int) -> MenuPage:
 def _font(size: int) -> pygame.font.Font:
     """按字号取字体（带缓存）。
 
-    优先使用系统的中文字体；一个都没找到时退回 pygame 内置字体，
+    优先使用随程序分发的字体（``assets/fonts``，见 :func:`resources.font_path`）：
+    这样界面文字在任何机器上都长一个样，不依赖别人装没装中文字体。
+    字体文件缺失时才退回系统的中文字体；再没有就退回 pygame 内置字体，
     此时中文会显示为占位方块，但界面结构依旧完整。
     """
     if not pygame.font.get_init():
         pygame.font.init()
-    path = pygame.font.match_font(list(_FONT_CANDIDATES))
-    return pygame.font.Font(path, size) if path else pygame.font.Font(None, size)
+    bundled = resources.font_path()
+    if bundled is not None:
+        return pygame.font.Font(str(bundled), size)
+    system = pygame.font.match_font(list(_FONT_CANDIDATES))
+    return pygame.font.Font(system, size) if system else pygame.font.Font(None, size)
 
 
 @functools.lru_cache(maxsize=1)

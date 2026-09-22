@@ -8,10 +8,10 @@
 
 ```
 .
-├─assets # 静态资源
 ├─docs # 相关文档
 ├─src
 │  └─another_arrow_rt265 # 源代码
+│     └─assets # 静态资源（随程序打包的字体等）
 ├─tests # 测试
 └─pyproject.toml 项目信息与依赖
 ```
