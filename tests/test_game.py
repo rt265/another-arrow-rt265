@@ -919,11 +919,13 @@ def test_settings_screen_ignores_board_clicks_and_in_game_shortcuts(
 ) -> None:
     session = game.session
     initial = session.arrows_left
-    # 点说明卡片（既不压开关也不压按钮的那一块）不该落到棋盘上。
-    card = ui.menu_layout(ui.settings_page(True, True)).sections[0]
+    # 点设置页的空白带（开关上方那一条，既不压开关也不压按钮）不该落到棋盘上。
+    layout = ui.menu_layout(ui.settings_page(True, True))
+    first_toggle = layout.toggles[0][1]
+    blank = (first_toggle.centerx, first_toggle.top - 20)
     _post_key(game, pygame.K_s)
 
-    _post_click(game, card.center)
+    _post_click(game, blank)
     _post_key(game, pygame.K_r)
     _post_key(game, pygame.K_RIGHT)
 

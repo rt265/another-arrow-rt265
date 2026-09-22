@@ -346,10 +346,10 @@ def test_settings_page_switch_states_reach_the_layout() -> None:
         ("toggle-music", True),
         ("toggle-sound", False),
     ]
-    # 两行开关左对齐、宽度一致，并且都排在说明卡片上面。
+    # 两行开关左对齐、宽度一致，并且按顺序自上而下排开。
     assert music[1].left == sound[1].left
     assert music[1].width == sound[1].width
-    assert sound[1].bottom < layout.sections[0].top
+    assert music[1].bottom < sound[1].top
 
 
 def test_settings_switches_reuse_the_guide_toggle_component() -> None:
@@ -362,25 +362,36 @@ def test_settings_switches_reuse_the_guide_toggle_component() -> None:
     assert row.contains(track), "轨道要落在开关行里"
 
 
-def test_settings_page_hint_points_at_the_in_game_shortcut() -> None:
-    """设置页的提示行负责两件“元信息”：游戏里怎么再打开、设置能活多久。"""
-    hint = ui.settings_page(True, True).hint
+def test_settings_page_keeps_no_explanatory_text() -> None:
+    """设置页只有开关与“返回”：界面不写多余的说明文字（用户 2026-09-22 明确要求）。
 
-    assert hint is not None, "设置页要有页脚提示行"
-    assert "S" in hint, "游戏里用 S 打开这一页，这个入口得写在页面上"
-    assert "关闭程序" in hint, "设置不落盘，页面应当说明这一点"
+    这是与开始界面同一条产品规则（见 `test_start_screen_keeps_no_rule_text`）：
+    讲玩法是第 1 关交互式教程的事，菜单页只放控件。用户删除文案是有意为之，
+    不要凭“文档 / 变更记录里写过”把它加回来。
+    """
+    page = ui.settings_page(True, True)
+    layout = ui.menu_layout(page)
+
+    assert page.sections == ()
+    assert page.hint is None
+    assert layout.sections == ()
+    assert layout.hint is None
 
 
-def test_menu_page_hint_fits_inside_its_box() -> None:
-    """提示行是居中画的，放不下就会溢出窗口：加字前先看这里。"""
-    for page in MENU_PAGES:
-        if page.hint is None:
-            continue
-        rect = ui.menu_layout(page).hint
-        assert rect is not None
+@pytest.mark.parametrize("text", ["游戏中按 S 打开这一页", "设置关闭程序后恢复默认"])
+def test_menu_page_hint_fits_inside_its_box(text: str) -> None:
+    """提示行是居中画的，放不下就会溢出窗口：加字前先看这里。
 
-        label = ui._TEXT_HINT.font().render(page.hint, True, config.COLOR_TEXT_MUTED)
-        assert label.get_width() <= rect.width, page.hint
+    当前**没有**任何页面用到提示行（界面不写多余说明文字，见
+    `test_settings_page_keeps_no_explanatory_text`），所以这里拿一个合成的页面
+    把机制本身钉住：将来用户真的要求在某页加一行提示时，宽度有现成的判据。
+    """
+    page = ui.MenuPage(title="示例", subtitle="SAMPLE", hint=text)
+    rect = ui.menu_layout(page).hint
+    assert rect is not None
+
+    label = ui._TEXT_HINT.font().render(text, True, config.COLOR_TEXT_MUTED)
+    assert label.get_width() <= rect.width, text
 
 
 def test_draw_settings_screen_renders_without_error() -> None:
