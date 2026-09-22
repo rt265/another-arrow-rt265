@@ -1,7 +1,8 @@
 """定位随程序分发的静态资源（``assets/``）。
 
-程序**自带**一套字体（Noto Sans CJK SC 的三个**静态字重**：Light / Regular / Bold），
-而不是碰运气去匹配系统字体。素材放在**包内**（``src/another_arrow_rt265/assets/``）：
+程序**自带**全部素材：一套字体（Noto Sans CJK SC 的三个**静态字重**：Light / Regular /
+Bold）与一套音频（背景音乐 + 五个音效）。字体不碰运气去匹配系统字体，音频不依赖
+用户机器上装了什么。素材放在**包内**（``src/another_arrow_rt265/assets/``）：
 打包工具会把包内文件原样搬走，而本文件就在它们旁边，所以 :data:`PACKAGE_DIRECTORY`
 永远是第一个候选——源码运行、``uv build`` 出的 wheel、Nuitka 打出的 exe 三种形态下
 位置相同（已用探针在产物里核实过）。
@@ -32,6 +33,10 @@ ASSETS_DIRECTORY: Final[str] = "assets"
 #: 字体所在子目录与文件名前缀：``assets/fonts/NotoSansCJKsc-<字重>.otf``。
 FONT_DIRECTORY: Final[str] = "fonts"
 FONT_STEM: Final[str] = "NotoSansCJKsc"
+
+#: 音频所在子目录与后缀：``assets/sounds/<名称>.mp3``（名称含义见 ``audio.Cue``）。
+SOUND_DIRECTORY: Final[str] = "sounds"
+SOUND_SUFFIX: Final[str] = ".mp3"
 
 #: 本文件所在目录，也就是包目录（素材默认就放在它的 ``assets/`` 下）。
 PACKAGE_DIRECTORY: Final[Path] = Path(__file__).resolve().parent
@@ -108,3 +113,18 @@ def font_parts(weight: FontWeight = DEFAULT_WEIGHT) -> tuple[str, ...]:
 def font_path(weight: FontWeight = DEFAULT_WEIGHT) -> Path | None:
     """返回某个字重的字体文件路径（找不到时为 ``None``，由调用方兜底）。"""
     return asset_path(*font_parts(weight))
+
+
+def sound_file_name(name: str) -> str:
+    """返回音频文件名（例如 ``background.mp3``）；``name`` 是 ``audio.Cue`` 的值。"""
+    return f"{name}{SOUND_SUFFIX}"
+
+
+def sound_parts(name: str) -> tuple[str, ...]:
+    """返回音频在 ``assets/`` 下的相对路径片段。"""
+    return (SOUND_DIRECTORY, sound_file_name(name))
+
+
+def sound_path(name: str) -> Path | None:
+    """返回音频文件路径（找不到时为 ``None``，由 :class:`audio.Audio` 静默跳过）。"""
+    return asset_path(*sound_parts(name))

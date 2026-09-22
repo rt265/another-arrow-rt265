@@ -10,6 +10,7 @@ import pygame
 import pytest
 
 from another_arrow_rt265 import config, ui, viewport
+from another_arrow_rt265.audio import Audio, Cue
 from another_arrow_rt265.board import Board, ClickResult
 from another_arrow_rt265.game import Game, Scene
 from another_arrow_rt265.levels import LEVELS
@@ -620,3 +621,194 @@ def test_the_tutorial_bar_follows_the_window(game: Game) -> None:
     panel = ui.tutorial_panel_rect()
     assert game.viewport.rect(0, 0, *config.WINDOW_SIZE).contains(panel)
     assert game.session.tutorial is not None
+
+
+# ---------------------------------------------------------------- 音乐与音效
+
+
+class _RecordingAudio(Audio):
+    """只记账不发声的 :class:`Audio`：用来断言“这个动作应该响哪一声”。
+
+    它是 ``Audio`` 的子类（而不是一个长得像的对象），这样把替身塞给 ``Game`` 时
+    类型上没有歧义；故意不调用 ``super().__init__()``——真实现一构造就会去读素材。
+    """
+
+    def __init__(self) -> None:
+        self.played: list[Cue] = []
+        self.music_starts = 0
+
+    def play(self, cue: Cue) -> bool:
+        self.played.append(cue)
+        return True
+
+    def start_music(self) -> bool:
+        self.music_starts += 1
+        return True
+
+
+@pytest.fixture
+def silent() -> _RecordingAudio:
+    """一份“只记账不发声”的音频替身。"""
+    return _RecordingAudio()
+
+
+@pytest.fixture
+def sound_game(silent: _RecordingAudio) -> Game:
+    """把上面那份替身装进窗口的、已经进入第 1 关的游戏。"""
+    instance = Game(audio_player=silent)
+    instance.start()
+    return instance
+
+
+def _run_until_result(game: Game) -> None:
+    """按固定帧长推进主循环，直到会话进入结算状态。"""
+    for _ in range(config.FPS * 3):
+        if not game.session.is_playing:
+            return
+        game._update(1.0 / config.FPS)
+    msg = "会话始终没有进入结算状态"
+    raise AssertionError(msg)
+
+
+def _blocked_arrow(session: Session) -> tuple[int, int]:
+    """找一个点不动的箭头，返回它的格子中心（用来制造失误）。"""
+    board = session.board
+    arrow = next(arrow for arrow in board.arrows if not board.is_path_clear(arrow))
+    return board.cell_rect(arrow.row, arrow.col).center
+
+
+def test_the_window_starts_playing_the_music(silent: _RecordingAudio) -> None:
+    Game(audio_player=silent)
+    assert silent.music_starts == 1
+
+
+def test_clearing_an_arrow_plays_the_fly_away_sound(
+    sound_game: Game, silent: _RecordingAudio
+) -> None:
+    _post_click(sound_game, sound_game.session.board.cell_rect(0, 1).center)
+    assert silent.played == [Cue.ARROW_FLY]
+
+
+def test_hitting_a_blocker_plays_the_collision_sound(
+    sound_game: Game, silent: _RecordingAudio
+) -> None:
+    session = sound_game.session
+    session.load_level(1)
+    _post_click(sound_game, _blocked_arrow(session))
+
+    assert silent.played == [Cue.ARROW_COLLIDE]
+
+
+def test_clicking_empty_space_is_silent(
+    sound_game: Game, silent: _RecordingAudio
+) -> None:
+    """点空既不扣失误也不该出声，否则每次擦过棋盘都是一顿噪声。"""
+    _post_click(sound_game, (10, config.WINDOW_HEIGHT // 2))
+    assert silent.played == []
+
+
+def test_clearing_the_level_plays_the_victory_sound(
+    sound_game: Game, silent: _RecordingAudio
+) -> None:
+    session = sound_game.session
+    session.load_level(1)
+    while not session.board.is_cleared:
+        board = session.board
+        arrow = next(arrow for arrow in board.arrows if board.is_path_clear(arrow))
+        _post_click(sound_game, board.cell_rect(arrow.row, arrow.col).center)
+    _run_until_result(sound_game)
+
+    assert session.status is GameStatus.LEVEL_CLEARED
+    assert silent.played[-1] is Cue.LEVEL_CLEARED
+
+
+def test_wasting_every_mistake_plays_the_failure_sound(
+    sound_game: Game, silent: _RecordingAudio
+) -> None:
+    session = sound_game.session
+    session.load_level(1)
+    for _ in range(session.max_mistakes):
+        _post_click(sound_game, _blocked_arrow(session))
+
+    assert session.status is GameStatus.FAILED
+    assert silent.played[-1] is Cue.LEVEL_FAILED
+    assert silent.played.count(Cue.LEVEL_FAILED) == 1, "失败只该响一声"
+
+
+def test_a_new_level_does_not_replay_the_result_sounds(
+    sound_game: Game, silent: _RecordingAudio
+) -> None:
+    """重开 / 换关是“安静地翻过去”，不会把上一关的通关声再放一遍。"""
+    session = sound_game.session
+    session.load_level(1)
+    for _ in range(session.max_mistakes):
+        _post_click(sound_game, _blocked_arrow(session))
+    assert session.status is GameStatus.FAILED
+
+    _post_click(sound_game, ui.overlay_button_rect().center)
+    assert session.status is GameStatus.PLAYING
+
+    silent.played.clear()
+    sound_game._update(1.0 / config.FPS)
+    assert silent.played == []
+
+
+def test_menu_buttons_play_the_click_sound(
+    silent: _RecordingAudio,
+) -> None:
+    game = Game(audio_player=silent)
+    _post_click(game, ui.start_button_rect().center)
+
+    game.return_to_start()
+    _post_click(game, ui.about_button_rect().center)
+
+    assert silent.played == [Cue.BUTTON, Cue.BUTTON]
+
+
+def test_enter_on_the_start_screen_plays_the_click_sound(
+    silent: _RecordingAudio,
+) -> None:
+    game = Game(audio_player=silent)
+    _post_key(game, pygame.K_RETURN)
+    assert silent.played == [Cue.BUTTON]
+
+
+def test_in_game_buttons_and_shortcuts_play_the_click_sound(
+    sound_game: Game, silent: _RecordingAudio
+) -> None:
+    session = sound_game.session
+
+    _post_click(sound_game, ui.restart_button_rect().center)
+    _post_click(sound_game, ui.guide_toggle_rect().center)
+    _post_click(sound_game, ui.tutorial_skip_button_rect().center)
+    _post_click(sound_game, ui.hud_home_button_rect().center)
+
+    assert silent.played == [Cue.BUTTON] * 4
+    assert sound_game.scene is Scene.START
+    # 按钮那几下没有一次落到棋盘上。
+    assert session.status is GameStatus.PLAYING
+
+
+def test_result_screen_buttons_play_the_click_sound(
+    sound_game: Game, silent: _RecordingAudio
+) -> None:
+    session = sound_game.session
+    session.load_level(1)
+    while not session.board.is_cleared:
+        board = session.board
+        arrow = next(arrow for arrow in board.arrows if board.is_path_clear(arrow))
+        _post_click(sound_game, board.cell_rect(arrow.row, arrow.col).center)
+    _run_until_result(sound_game)
+
+    silent.played.clear()
+    _post_click(sound_game, ui.overlay_button_rect().center)
+    assert session.level_number == 3
+    assert silent.played == [Cue.BUTTON]
+
+
+def test_enter_while_playing_is_silent(
+    sound_game: Game, silent: _RecordingAudio
+) -> None:
+    """游戏进行中按 Enter 什么也没发生，那么就不该有反馈声。"""
+    _post_key(sound_game, pygame.K_RETURN)
+    assert silent.played == []

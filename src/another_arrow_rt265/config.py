@@ -226,3 +226,10 @@ COLOR_OVERLAY: Final[Color] = (8, 11, 18)
 OVERLAY_ALPHA: Final[int] = 200
 COLOR_SUCCESS: Final[Color] = (108, 220, 156)
 COLOR_FAILURE: Final[Color] = (238, 92, 92)
+
+# ------------------------------------------------------------------ 音频
+# 两条音量分开：背景音乐是长时间循环的底噪，压低到“听得出有，但不抢注意力”；
+# 音效是短促的操作反馈（点按钮、箭头飞出、撞墙、通关 / 失败），要能一耳朵听清，
+# 所以留得比音乐高。素材随程序分发（`assets/sounds/`），见 `audio.py`。
+MUSIC_VOLUME: Final[float] = 0.35
+SOUND_VOLUME: Final[float] = 0.7

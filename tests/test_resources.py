@@ -12,13 +12,16 @@ from pathlib import Path
 import pygame
 import pytest
 
-from another_arrow_rt265 import resources, ui
+from another_arrow_rt265 import audio, resources, ui
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 FONT_FILE_NAMES = tuple(
     resources.font_file_name(weight) for weight in resources.BUNDLED_WEIGHTS
 )
+
+#: 随程序分发的全部音频（五个音效 + 一首背景音乐）的文件主名。
+SOUND_FILE_STEMS = tuple(cue.value for cue in audio.Cue) + (audio.MUSIC,)
 
 
 def _styles() -> list[ui._TextStyle]:
@@ -248,4 +251,46 @@ def test_assets_font_directory_holds_exactly_the_declared_fonts() -> None:
 
     assert sorted(path.name for path in fonts_dir.glob("*.otf")) == sorted(
         FONT_FILE_NAMES
+    )
+
+
+# ---------------------------------------------------------------- 音频素材
+
+
+@pytest.mark.parametrize("stem", SOUND_FILE_STEMS)
+def test_bundled_sound_is_found(stem: str) -> None:
+    path = resources.sound_path(stem)
+
+    assert path is not None, f"包内 assets/sounds 的 {stem}.mp3 没有被找到"
+    assert path.is_file()
+    assert path.parent.name == resources.SOUND_DIRECTORY
+    assert path == resources.asset_path(*resources.sound_parts(stem))
+
+
+def test_sound_file_names_follow_the_directory_layout() -> None:
+    """文件名写法只有一处定义：``assets/sounds/<名称>.mp3``。"""
+    assert resources.SOUND_SUFFIX == ".mp3"
+    assert resources.sound_file_name(audio.Cue.BUTTON) == "button.mp3"
+    assert resources.sound_parts(audio.MUSIC) == ("sounds", "background.mp3")
+
+
+@pytest.mark.parametrize("stem", SOUND_FILE_STEMS)
+def test_bundled_sounds_live_inside_the_package(stem: str) -> None:
+    """与字体同规矩：素材必须落在包内，否则 wheel / Nuitka 产物都带不上它。"""
+    path = resources.sound_path(stem)
+    assert path is not None
+
+    assert path.is_relative_to(resources.PACKAGE_DIRECTORY)
+
+
+def test_assets_sound_directory_holds_exactly_the_declared_sounds() -> None:
+    """包内 ``assets/sounds`` 里只有声明且实际播放的音频（不多不少）。"""
+    sounds_dir = (
+        resources.PACKAGE_DIRECTORY
+        / resources.ASSETS_DIRECTORY
+        / resources.SOUND_DIRECTORY
+    )
+
+    assert sorted(path.stem for path in sounds_dir.iterdir()) == sorted(
+        SOUND_FILE_STEMS
     )

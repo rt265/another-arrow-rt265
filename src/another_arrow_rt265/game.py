@@ -32,6 +32,12 @@
 720×720 的设计尺寸等比映射到当前窗口并居中，文字与图形都是照着目标尺寸重画的；
 窗口尺寸变化由 :meth:`Game._sync_window_size` 每帧核对后接管——换视口、让会话把棋盘
 重新摆到新的可用区域，**关卡进度、失误、计时与教程进度都不受影响**。
+
+**音频**（事项 16）由 :class:`~another_arrow_rt265.audio.Audio` 统一播放：窗口一打开就
+循环放背景音乐，操作与规则事件各配一声音效（按钮、箭头飞出、撞墙、通关、失败）。
+声音是**旁白而不是规则**：本模块只负责“看见了什么就响哪一声”，
+:mod:`another_arrow_rt265.session` / :mod:`another_arrow_rt265.board` 对音频一无所知，
+所以没有声卡时（headless、CI）整套逻辑照常跑，只是安静一点。
 """
 
 from __future__ import annotations
@@ -40,7 +46,8 @@ from enum import Enum
 
 import pygame
 
-from another_arrow_rt265 import config, ui, viewport
+from another_arrow_rt265 import audio, config, ui, viewport
+from another_arrow_rt265.board import ClickResult
 from another_arrow_rt265.session import GameStatus, Session
 
 
@@ -60,11 +67,15 @@ class Scene(Enum):
 class Game:
     """承载关卡流程的 pygame 应用，负责事件分发与画面刷新。"""
 
-    def __init__(self, level_index: int = 0) -> None:
+    def __init__(
+        self, level_index: int = 0, *, audio_player: audio.Audio | None = None
+    ) -> None:
         """初始化窗口并创建会话。
 
         Args:
             level_index: 起始关卡序号，越界时会自动取模。
+            audio_player: 音频播放器；不传就新建一个真实的（测试可以塞一个只记账不发声的
+                替身，用来断言“这个动作应该响哪一声”）。
         """
         pygame.init()
         # 窗口可以自由缩放（拖边、最大化）：界面几何全部按当前视口重算，
@@ -74,6 +85,9 @@ class Game:
         self.clock = pygame.time.Clock()
         self.running = True
         self.scene = Scene.START
+        # 背景音乐从窗口打开放到程序退出：它不区分画面，也不再重播（start_music 幂等）。
+        self.audio = audio.Audio() if audio_player is None else audio_player
+        self.audio.start_music()
         # 辅助线开关（右下角的开关与 G 键共用）。默认关闭：它是可选功能，
         # 而不是“默认替玩家把答案标出来”。它是窗口级的显示偏好，而不是关卡状态：
         # 存在这里就不会因为重开本关、进入下一关而被重置。
@@ -82,6 +96,9 @@ class Game:
         # 窗口尺寸变化时由 `_sync_window_size()` 重建，会话则只换棋盘几何、不丢进度。
         self.viewport = viewport.set_current(viewport.Viewport.fit(config.WINDOW_SIZE))
         self.session = Session(ui.board_area(), level_index=level_index)
+        # 上一次看到的会话状态：用它把“状态变了”翻成一声通关 / 失败音效，
+        # 因此不论状态是在点击里还是在刷新里翻的，都不会漏掉或多放。
+        self._last_status = self.session.status
 
     def run(self) -> None:
         """进入主循环，直到窗口被关闭。"""
@@ -120,9 +137,27 @@ class Game:
 
         只有游戏画面会让会话前进，因此在开始界面停留多久都不会计入
         关卡用时（计时器只是 :attr:`session` 的一部分状态）。
+        通关 / 失败是在刷新里定下来的（飞出动画播完后的结算停顿），因此每帧
+        核对一次状态变化，把结算音效补上。
         """
         if self.scene is Scene.PLAYING:
             self.session.update(dt)
+            self._sync_audio_status()
+
+    def _sync_audio_status(self) -> None:
+        """会话状态变化时放一声音效（点击之后与每帧刷新后各核对一次）。
+
+        只认“变了没有”，因此不用担心同一次结算被响两遍；重新开一关（状态回到
+        ``PLAYING``）是安静地翻过去，不会放出任何声音。
+        """
+        status = self.session.status
+        if status is self._last_status:
+            return
+        self._last_status = status
+        if status is GameStatus.LEVEL_CLEARED:
+            self.audio.play(audio.Cue.LEVEL_CLEARED)
+        elif status is GameStatus.FAILED:
+            self.audio.play(audio.Cue.LEVEL_FAILED)
 
     def start(self) -> None:
         """离开开始界面，从第 1 关开始新的一局（第 1 关带交互式教程）。"""
@@ -172,6 +207,9 @@ class Game:
         但万一以后调布局压到了棋盘，也应当是开关优先）；结算界面其余区域不响应
         棋盘点击；第 1 关的教程提示条只让“跳过教程”生效，条上的其他位置吃掉点击，
         免得漏到棋盘上。
+
+        音效跟着“结果”而不是“位置”走：碰到按钮就响按钮声，碰到棋盘则由
+        :meth:`_click_board` 按棋盘的答复选声（另见 :meth:`_sync_audio_status`）。
         """
         if self.scene is not Scene.PLAYING:
             self._handle_menu_click(position)
@@ -179,25 +217,43 @@ class Game:
 
         if not self.session.is_playing:
             if ui.overlay_home_button_rect().collidepoint(position):
+                self.audio.play(audio.Cue.BUTTON)
                 self.return_to_start()
             elif ui.overlay_button_rect().collidepoint(position):
                 self._run_primary_action()
             return
 
         if ui.hud_home_button_rect().collidepoint(position):
+            self.audio.play(audio.Cue.BUTTON)
             self.return_to_start()
         elif ui.restart_button_rect().collidepoint(position):
+            self.audio.play(audio.Cue.BUTTON)
             self.session.restart_level()
         elif ui.guide_toggle_rect().collidepoint(position):
+            self.audio.play(audio.Cue.BUTTON)
             self.show_guides = not self.show_guides
         elif (
             self.session.tutorial is not None
             and ui.tutorial_panel_rect().collidepoint(position)
         ):
             if ui.tutorial_skip_button_rect().collidepoint(position):
+                self.audio.play(audio.Cue.BUTTON)
                 self.session.skip_tutorial()
         else:
-            self.session.click(position)
+            self._click_board(position)
+
+    def _click_board(self, position: tuple[int, int]) -> None:
+        """把点击交给棋盘，并按棋盘的回答放出对应的音效。
+
+        飞出与撞墙的声音都由 :class:`~another_arrow_rt265.board.ClickResult` 决定：
+        点空不响（MISS），因此“拉一下空气”不会每次都给玩家一顿噪声。
+        """
+        result = self.session.click(position)
+        if result is ClickResult.CLEARED:
+            self.audio.play(audio.Cue.ARROW_FLY)
+        elif result is ClickResult.BLOCKED:
+            self.audio.play(audio.Cue.ARROW_COLLIDE)
+        self._sync_audio_status()
 
     def _handle_menu_click(self, position: tuple[int, int]) -> None:
         """把点击派给当前菜单页上声明过的按钮（绘制与命中判定共用同一份坐标）。"""
@@ -211,36 +267,45 @@ class Game:
 
         ``H`` 在菜单页与游戏画面都生效；``R``、``G`` 与左右方向键只在游戏画面生效，
         免得在开始界面误触改掉进度或开关（``G`` 与右下角那颗开关是同一个开关）。
+        这些快捷键等价于按了某个按钮，因此同样响一声音效；``Esc`` 除外（它只是关窗口），
+        以及在游戏进行中按 Enter / 空格——那下什么也没发生，不该给反馈。
         """
         if key == pygame.K_ESCAPE:
             self.running = False
         elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
             self._run_primary_action()
         elif key == pygame.K_h:
+            self.audio.play(audio.Cue.BUTTON)
             self.return_to_start()
         elif self.scene is Scene.PLAYING:
             if key == pygame.K_r:
+                self.audio.play(audio.Cue.BUTTON)
                 self.session.restart_level()
             elif key == pygame.K_g:
+                self.audio.play(audio.Cue.BUTTON)
                 self.show_guides = not self.show_guides
             elif key == pygame.K_LEFT:
+                self.audio.play(audio.Cue.BUTTON)
                 self.session.load_level(self.session.level_index - 1)
             elif key == pygame.K_RIGHT:
+                self.audio.play(audio.Cue.BUTTON)
                 self.session.load_level(self.session.level_index + 1)
 
     def _run_primary_action(self) -> None:
         """执行当前画面的主按钮动作（按钮点击与 Enter / 空格共用入口）。
 
         菜单页取 :meth:`ui.MenuPage.default_action`（主按钮优先），因此新增页面
-        只要声明了按钮就自动获得 Enter / 空格支持；游戏画面里进行中不作处理
-        （避免误触丢进度），结算后则分别是“重试本关”与“下一关”（最后一关回到
-        第 1 关重开一轮）。想回主界面走旁边的“回到主界面”按钮或 ``H`` 键，
-        不共用这个入口。
+        只要声明了按钮就自动获得 Enter / 空格支持（音效也由 :meth:`_run_action`
+        一并包办）；游戏画面里进行中不作处理（避免误触丢进度），结算后则分别是
+        “重试本关”与“下一关”（最后一关回到第 1 关重开一轮）。想回主界面走旁边的
+        “回到主界面”按钮或 ``H`` 键，不共用这个入口。
         """
         if self.scene is Scene.PLAYING:
             if self.session.status is GameStatus.FAILED:
+                self.audio.play(audio.Cue.BUTTON)
                 self.session.restart_level()
             elif self.session.status is GameStatus.LEVEL_CLEARED:
+                self.audio.play(audio.Cue.BUTTON)
                 self.session.advance()
             return
 
@@ -249,7 +314,7 @@ class Game:
             self._run_action(action)
 
     def _run_action(self, action: str) -> None:
-        """执行菜单动作。
+        """执行菜单动作（分发前先放一声音效——菜单上的按钮都点得动）。
 
         这是界面与逻辑之间唯一的接口：``ui`` 里的按钮只声明动作名，具体做什么
         都在这个表里。新增一个界面时，把它的按钮动作补到这里即可。
@@ -266,6 +331,7 @@ class Game:
         if handler is None:
             msg = f"未注册的菜单动作：{action}"
             raise KeyError(msg)
+        self.audio.play(audio.Cue.BUTTON)
         handler()
 
     def _draw(self) -> None:
