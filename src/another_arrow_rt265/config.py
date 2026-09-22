@@ -53,6 +53,43 @@ TUTORIAL_SKIP_SIZE: Final[tuple[int, int]] = (104, 30)
 TUTORIAL_PULSE_SECONDS: Final[float] = 1.2
 TUTORIAL_RING_GROW: Final[int] = 5
 
+# ------------------------------------------------------------------ 辅助线
+# 辅助线是**可选**的：默认关闭，右下角有一颗常驻开关（`G` 键同效）。
+# 打开后每个箭头都沿它当前的前进方向画一条虚线，终点就是“这一箭会停在哪”——
+# 前方畅通时顶到棋盘边缘（箭头正是从那里飞出棋盘），被挡住时停在挡路箭头的圆片外沿。
+# 颜色只表达“这一点击得动 / 点不动”，线本身不参与任何判定，也不改变箭头的颜色身份。
+GUIDE_LINE_COLOR_CLEAR: Final[Color] = (110, 226, 178)
+GUIDE_LINE_COLOR_BLOCKED: Final[Color] = (255, 132, 132)
+# 没有悬停时（或悬停的是别的箭头）把线色混向格子底色，让常显的线淡下去，
+# 只有鼠标指着的那条最醒目。与“被谁挡住”的提示一样，用混色而不是透明通道，
+# 免得为每条线各开一张图层。
+GUIDE_LINE_DIM_MIX: Final[float] = 0.55
+GUIDE_LINE_WIDTH: Final[int] = 2
+# 虚线的实线段与空白段长度（像素）。
+GUIDE_LINE_DASH: Final[float] = 9.0
+GUIDE_LINE_GAP: Final[float] = 7.0
+# 终点方向标记的尺寸（箭头张开长度 / 横杠总长），以及线段离圆片外沿的留白。
+GUIDE_LINE_HEAD: Final[float] = 11.0
+GUIDE_LINE_CAP: Final[float] = 13.0
+GUIDE_LINE_MARGIN: Final[float] = 5.0
+
+# 右下角的开关：一颗胶囊（左边文字 + 右边滑动开关）。
+# 垂直留白比水平留白紧得多——最大的棋盘（6x6）最后一排格子一直铺到 y=674，
+# 开关必须在它下面落脚，所以底边只留 8px；右边缘按常规留白对齐。
+GUIDE_TOGGLE_SIZE: Final[tuple[int, int]] = (122, 32)
+GUIDE_TOGGLE_MARGIN: Final[tuple[int, int]] = (24, 8)
+GUIDE_TOGGLE_LABEL: Final[str] = "辅助线"
+# 胶囊内文字 / 轨道的留白，以及轨道的尺寸与滑块半径。
+GUIDE_TOGGLE_PADDING: Final[int] = 12
+GUIDE_TOGGLE_TRACK_SIZE: Final[tuple[int, int]] = (36, 20)
+GUIDE_TOGGLE_KNOB_RADIUS: Final[int] = 7
+# 开关轨道与滑块的配色：打开后轨道取辅助线的“畅通”色，
+# 因此“开关是绿的”与“棋盘上那些绿线”是同一件事的两种说法。
+GUIDE_TOGGLE_TRACK_ON: Final[Color] = GUIDE_LINE_COLOR_CLEAR
+GUIDE_TOGGLE_TRACK_OFF: Final[Color] = (52, 60, 82)
+GUIDE_TOGGLE_KNOB_ON: Final[Color] = (240, 246, 255)
+GUIDE_TOGGLE_KNOB_OFF: Final[Color] = (128, 141, 168)
+
 # ------------------------------------------------------------------ 反馈
 # 撞到其他箭头时的闪烁提示持续时间（秒）。
 BLOCKED_FLASH_SECONDS: Final[float] = 0.45

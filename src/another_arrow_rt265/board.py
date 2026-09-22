@@ -5,7 +5,11 @@
 
 - 清除箭头时播放“飞出棋盘”的动画（逻辑移除是瞬时的，动画只是视觉表现）；
 - 被阻挡时箭头沿前进方向抖动、前方溅出火花，并高亮提示挡路的箭头；
-- 被选中的箭头带一圈呼吸式描边。
+- 被选中的箭头带一圈呼吸式描边；
+- **辅助线**（可选功能，默认关闭）：打开后每个箭头都沿它当前的前进方向拉一条虚线，
+  顶到棋盘边缘（表示这一箭点得动）或停在挡路箭头上（表示点不动），
+  鼠标指着的那条会更亮；见 :meth:`Board.guide_line`。
+  辅助线只读棋盘状态、不改判定，因此每帧重算就自动跟得上棋盘的变化。
 
 每个箭头都有自己的主题色（见 :mod:`another_arrow_rt265.palette`）：颜色由格子的
 位置决定，一关之内不会变；选中与碰撞状态只在主题色上提亮 / 染色，不换颜色身份。
@@ -91,6 +95,29 @@ class FlyingArrow:
     def finished(self) -> bool:
         """飞行是否已经结束（箭头已完全飞出可见区域）。"""
         return self.elapsed >= config.FLY_OUT_SECONDS
+
+
+@dataclass(frozen=True, slots=True)
+class GuideLine:
+    """一条辅助线：沿某个箭头的前进方向画出的一段路径提示。
+
+    它只描述“从哪儿画到哪儿”，不参与任何判定：``blocker`` 为空表示前方畅通、
+    ``end`` 落在棋盘边缘；否则 ``end`` 落在挡路箭头圆片的外沿，再往前就是撞上的地方。
+    """
+
+    arrow: Arrow
+    """这条辅助线属于哪个箭头。"""
+    start: tuple[float, float]
+    """起点：箭头自己圆片外沿上、朝前进方向的那一点。"""
+    end: tuple[float, float]
+    """终点：棋盘边缘（畅通）或挡路箭头的外沿（被挡）。"""
+    blocker: Arrow | None
+    """挡在前进方向上的箭头，畅通时为 ``None``。"""
+
+    @property
+    def blocked(self) -> bool:
+        """这条辅助线是否停在另一个箭头上（也就是这一箭当前点不动）。"""
+        return self.blocker is not None
 
 
 class ClickResult(Enum):
@@ -260,6 +287,47 @@ class Board:
         """判断 ``arrow`` 前进方向上是否不存在其他箭头。"""
         return self.blocking_arrow(arrow) is None
 
+    def guide_line(self, arrow: Arrow) -> GuideLine:
+        """返回 ``arrow`` 的辅助线：沿它当前的前进方向画到“这一箭会停在哪”。
+
+        终点有两种，正好对应 :meth:`handle_click` 的两种结果：
+
+        - **前方畅通**：终点落在棋盘可见区域的边缘，也就是它飞出棋盘的那条边；
+        - **前方被挡**：终点落在第一个挡路箭头圆片的外沿，线到此为止。
+
+        几何全部由 :meth:`cell_rect` 与 :meth:`blocking_arrow` 推出来，因此辅助线
+        与绘制、点击判定读的是同一份坐标；线本身只是视觉提示，不改变任何状态。
+        """
+        cell = self.cell_rect(arrow.row, arrow.col)
+        radius = cell.width * 0.44
+        unit_x, unit_y = arrow.direction.vector
+        center = (float(cell.centerx), float(cell.centery))
+        start = _point_towards(
+            center,
+            (center[0] + unit_x, center[1] + unit_y),
+            radius + config.GUIDE_LINE_MARGIN,
+        )
+
+        blocker = self.blocking_arrow(arrow)
+        if blocker is not None:
+            target = self.cell_rect(blocker.row, blocker.col)
+            end = _point_towards(
+                target.center, center, radius + config.GUIDE_LINE_MARGIN
+            )
+            return GuideLine(arrow, start, end, blocker)
+
+        panel = self.rect.inflate(2 * config.CELL_GAP, 2 * config.CELL_GAP)
+        if unit_x > 0:
+            distance = panel.right - center[0]
+        elif unit_x < 0:
+            distance = center[0] - panel.left
+        elif unit_y > 0:
+            distance = panel.bottom - center[1]
+        else:
+            distance = center[1] - panel.top
+        end = (center[0] + unit_x * distance, center[1] + unit_y * distance)
+        return GuideLine(arrow, start, end, None)
+
     def remove(self, arrow: Arrow) -> bool:
         """把 ``arrow`` 从棋盘上移除，成功返回 ``True``。
 
@@ -347,11 +415,25 @@ class Board:
         self._blocked_flash = None
         self._flash_remaining = 0.0
 
-    def draw(self, surface: pygame.Surface) -> None:
+    def draw(
+        self,
+        surface: pygame.Surface,
+        mouse: tuple[int, int] | None = None,
+        *,
+        show_guides: bool = False,
+    ) -> None:
         """把棋盘底板、格子、箭头与飞出动画绘制到 ``surface`` 上。
 
-        绘制顺序为：面板 → 格子 → “被谁挡住”的提示 → 棋盘上的箭头 → 飞行中的箭头，
-        因此飞出动画始终显示在最上层，不会被面板或格子遮挡。
+        绘制顺序为：面板 → 格子 → 辅助线 → “被谁挡住”的提示 → 棋盘上的箭头 →
+        飞行中的箭头，因此飞出动画始终显示在最上层，不会被面板或格子遮挡，
+        辅助线则压在箭头下面（线穿过别的格子时不会盖住那些箭头）。
+
+        Args:
+            surface: 绘制目标。
+            mouse: 鼠标位置。辅助线打开时，悬停的箭头会画得更亮；为 ``None`` 时
+                所有线一视同仁。
+            show_guides: 辅助线开关（右下角开关 / ``G`` 键），默认关闭。
+                关着时**一条线都不画**，打开后所有箭头各画一条。
         """
         panel = self.rect.inflate(2 * config.CELL_GAP, 2 * config.CELL_GAP)
         pygame.draw.rect(
@@ -375,6 +457,7 @@ class Board:
                     border_radius=config.CELL_RADIUS,
                 )
 
+        self._draw_guides(surface, mouse, show_guides)
         self._draw_blocker_hint(surface)
 
         for arrow in self:
@@ -442,6 +525,54 @@ class Board:
             _draw_impact_sparks(
                 surface, center, cell.width, arrow.direction, self.flash_progress
             )
+
+    def _draw_guides(
+        self,
+        surface: pygame.Surface,
+        mouse: tuple[int, int] | None,
+        show_guides: bool,
+    ) -> None:
+        """绘制辅助线：关着时一条都不画，打开后其余箭头淡一档、悬停那条最醒目。
+
+        悬停的箭头由 ``mouse`` 现算（:meth:`hit_test`），所以点掉一个箭头之后，
+        辅助线会立刻跟着消失，不需要另外维护“谁被指着”的状态。
+        """
+        if not show_guides:
+            return
+        hovered = self.hit_test(mouse) if mouse is not None else None
+        for arrow in self:
+            if arrow != hovered:
+                self._draw_guide(surface, self.guide_line(arrow), dim=True)
+        if hovered is not None:
+            self._draw_guide(surface, self.guide_line(hovered), dim=False)
+
+    def _draw_guide(
+        self, surface: pygame.Surface, line: GuideLine, *, dim: bool
+    ) -> None:
+        """绘制一条辅助线：虚线 + 终点标记。
+
+        颜色只有两种：畅通用绿色、被挡用红色；``dim`` 是“全部显示”里的淡色版。
+        长度不足一个虚线段时直接跳过，免得在贴边的短线上堆出一个小墨点。
+        """
+        if math.dist(line.start, line.end) < config.GUIDE_LINE_DASH:
+            return
+        color = (
+            config.GUIDE_LINE_COLOR_BLOCKED
+            if line.blocked
+            else config.GUIDE_LINE_COLOR_CLEAR
+        )
+        if dim:
+            color = palette.mix(color, config.COLOR_CELL, config.GUIDE_LINE_DIM_MIX)
+        _draw_dashed_line(
+            surface,
+            line.start,
+            line.end,
+            color,
+            dash=config.GUIDE_LINE_DASH,
+            gap=config.GUIDE_LINE_GAP,
+            width=config.GUIDE_LINE_WIDTH,
+        )
+        _draw_guide_cap(surface, line, color)
 
     def _draw_flying_arrow(self, surface: pygame.Surface, flying: FlyingArrow) -> None:
         """绘制飞出动画：位置由 :class:`FlyingArrow` 给出，越接近飞出越透明。"""
@@ -589,6 +720,42 @@ def _draw_impact_sparks(
             (center[0] + cos_angle * outer, center[1] + sin_angle * outer),
             width=2,
         )
+
+
+def _draw_guide_cap(
+    surface: pygame.Surface,
+    line: GuideLine,
+    color: config.Color,
+) -> None:
+    """在辅助线的终点画一个方向标记。
+
+    畅通时是一个越过棋盘边缘、指向线外的小箭头（“这一箭从这里飞出去”）；
+    被挡住时是一段垂直于前进方向的短横杠（“到此为止，前面有东西”）。
+    标记的朝向完全由箭头的方向决定，所以辅助线本身就说明了“往哪走”。
+    """
+    unit_x, unit_y = line.arrow.direction.vector
+    perpendicular_x, perpendicular_y = -unit_y, unit_x
+    end_x, end_y = line.end
+
+    if line.blocked:
+        half = config.GUIDE_LINE_CAP / 2.0
+        pygame.draw.line(
+            surface,
+            color,
+            (end_x - perpendicular_x * half, end_y - perpendicular_y * half),
+            (end_x + perpendicular_x * half, end_y + perpendicular_y * half),
+            width=config.GUIDE_LINE_WIDTH + 1,
+        )
+        return
+
+    head = config.GUIDE_LINE_HEAD
+    tip = (end_x + unit_x * head, end_y + unit_y * head)
+    for sign in (1.0, -1.0):
+        barb = (
+            tip[0] - unit_x * head + perpendicular_x * head * 0.55 * sign,
+            tip[1] - unit_y * head + perpendicular_y * head * 0.55 * sign,
+        )
+        pygame.draw.line(surface, color, tip, barb, width=config.GUIDE_LINE_WIDTH)
 
 
 def _draw_dashed_line(

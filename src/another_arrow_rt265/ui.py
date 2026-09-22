@@ -10,7 +10,7 @@
 - 菜单页：大标题 + 副标题 +（可选）方向箭头装饰 +（可选）主按钮 + 若干说明卡片
   + 提示行 + 页脚按钮。开始界面与关于界面都是菜单页，只是内容不同；
 - 进行中：左上角“回到主界面”、关卡 / 剩余箭头 / 用时 / 失误四块统计卡片，
-  右侧“重新开始”按钮；
+  右侧“重新开始”按钮，右下角“辅助线”开关（见 :func:`draw_guide_toggle`）；
 - 教程（只在第 1 关）：棋盘上方的引导提示条 + 待点击箭头的呼吸高亮，
   叠加在“进行中”画面上（见 :func:`draw_tutorial`）；
 - 通关 / 失败：叠加遮罩与卡片（正文下方额外报一下本关用时），
@@ -290,7 +290,7 @@ def about_page(total_levels: int, max_mistakes: int) -> MenuPage:
                 (
                     "点击箭头，前方没有阻挡时它会飞出棋盘",
                     "被挡住的箭头飞不出去，还会消耗一次失误",
-                    "鼠标左键点击 · R 重开本关 · H 回主界面",
+                    "鼠标左键点击 · 右下角开关切换辅助线 · R 重开 · H 回主界面",
                 ),
             ),
             MenuSection(
@@ -613,6 +613,36 @@ def restart_button_rect() -> pygame.Rect:
     )
 
 
+def guide_toggle_rect() -> pygame.Rect:
+    """返回右下角“辅助线”开关的区域。
+
+    它贴在窗口右下角，是游戏画面上唯一一个“与关卡进度无关、随时可点”的控件。
+    位置受一条硬约束：**不能盖住任何格子**——最大的棋盘（6x6）最后一排格子
+    一直铺到 y=674，因此底边只留 ``config.GUIDE_TOGGLE_MARGIN`` 里的 8px，
+    横向则照常用 24px。``tests/test_ui.py`` 会对每一关逐一验证这一点。
+    """
+    width, height = config.GUIDE_TOGGLE_SIZE
+    right_margin, bottom_margin = config.GUIDE_TOGGLE_MARGIN
+    return pygame.Rect(
+        config.WINDOW_WIDTH - right_margin - width,
+        config.WINDOW_HEIGHT - bottom_margin - height,
+        width,
+        height,
+    )
+
+
+def _guide_toggle_track_rect() -> pygame.Rect:
+    """返回开关轨道的区域（贴在胶囊右侧、垂直居中）。"""
+    pill = guide_toggle_rect()
+    width, height = config.GUIDE_TOGGLE_TRACK_SIZE
+    return pygame.Rect(
+        pill.right - config.GUIDE_TOGGLE_PADDING - width,
+        pill.centery - height // 2,
+        width,
+        height,
+    )
+
+
 def start_button_rect() -> pygame.Rect:
     """返回开始界面上“开始游戏”按钮的区域。"""
     return _hero_row_rects(1)[0]
@@ -813,15 +843,19 @@ def draw_ui(
     surface: pygame.Surface,
     session: Session,
     mouse: tuple[int, int] | None = None,
+    *,
+    show_guides: bool = False,
 ) -> None:
-    """按会话状态绘制游戏画面（信息栏、教程提示，结算时再加一层卡片）。
+    """按会话状态绘制游戏画面（信息栏、辅助线开关，结算时再加一层卡片）。
 
     Args:
         surface: 绘制目标。
         session: 当前会话，用于读取关卡号、剩余箭头、本关用时与失误次数。
-        mouse: 鼠标位置，仅用于按钮的悬停高亮；为 ``None`` 时不显示悬停效果。
+        mouse: 鼠标位置，用于按钮与开关的悬停高亮；为 ``None`` 时不显示悬停效果。
+        show_guides: 辅助线开关的状态，决定右下角开关画成“开”还是“关”。
     """
     draw_hud(surface, session, mouse)
+    draw_guide_toggle(surface, show_guides, mouse)
     draw_tutorial(surface, session, mouse)
     if session.status is not GameStatus.PLAYING:
         draw_overlay(surface, session, mouse)
@@ -863,6 +897,68 @@ def draw_hud(
 
     _draw_secondary_button(
         surface, restart_button_rect(), "重新开始", mouse, icon=icons.Icon.RESTART
+    )
+
+
+def draw_guide_toggle(
+    surface: pygame.Surface,
+    enabled: bool,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """绘制右下角的“辅助线”开关：一颗胶囊（左边文字 + 右边滑动开关）。
+
+    辅助线是可选功能，因此开关必须**自己说明自己当前的档位**：
+    关着时轨道是暗灰、文字也是灰的；打开后轨道换成辅助线“畅通”的青绿色、文字提亮，
+    和棋盘上那些线是同一件事的两种说法。悬停时胶囊整体提亮（与旁边的按钮同一套外观）。
+
+    Args:
+        surface: 绘制目标。
+        enabled: 辅助线当前是否打开。
+        mouse: 鼠标位置，仅用于悬停高亮。
+    """
+    pill = guide_toggle_rect()
+    track = _guide_toggle_track_rect()
+    hovered = mouse is not None and pill.collidepoint(mouse)
+    lit = hovered or enabled
+
+    _draw_panel(
+        surface,
+        pill,
+        config.COLOR_BUTTON_TOP_HOVER if lit else config.COLOR_BUTTON_TOP,
+        config.COLOR_BUTTON_BOTTOM_HOVER if lit else config.COLOR_BUTTON_BOTTOM,
+        radius=pill.height // 2,
+        border=config.COLOR_BUTTON_BORDER,
+        shadow_spread=6,
+    )
+
+    label = _font(_FONT_LABEL).render(
+        config.GUIDE_TOGGLE_LABEL,
+        True,
+        config.COLOR_TEXT if enabled else config.COLOR_TEXT_MUTED,
+    )
+    surface.blit(
+        label,
+        (
+            pill.left + config.GUIDE_TOGGLE_PADDING,
+            pill.centery - label.get_height() // 2,
+        ),
+    )
+
+    pygame.draw.rect(
+        surface,
+        config.GUIDE_TOGGLE_TRACK_ON if enabled else config.GUIDE_TOGGLE_TRACK_OFF,
+        track,
+        border_radius=track.height // 2,
+    )
+    # 滑块靠向哪一侧就是“开 / 关”的第二个信号（颜色之外再给一层冗余表达）。
+    radius = config.GUIDE_TOGGLE_KNOB_RADIUS
+    margin = (track.height - 2 * radius) // 2
+    knob_x = track.right - radius - margin if enabled else track.left + radius + margin
+    pygame.draw.circle(
+        surface,
+        config.GUIDE_TOGGLE_KNOB_ON if enabled else config.GUIDE_TOGGLE_KNOB_OFF,
+        (knob_x, track.centery),
+        radius,
     )
 
 

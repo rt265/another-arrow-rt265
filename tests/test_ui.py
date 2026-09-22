@@ -8,7 +8,7 @@ import pygame
 import pytest
 
 from another_arrow_rt265 import config, icons, ui
-from another_arrow_rt265.levels import Level
+from another_arrow_rt265.levels import LEVELS, Level
 from another_arrow_rt265.session import GameStatus, Session
 
 AREA = pygame.Rect(0, 0, 640, 640)
@@ -131,6 +131,62 @@ def test_timer_chip_has_room_for_a_long_time_reading() -> None:
     assert widest.get_width() + 2 * ui._HUD_CHIP_PADDING <= elapsed.width
 
 
+# ---------------------------------------------------------------- 辅助线开关
+
+
+def _color_hits(surface: pygame.Surface, color: config.Color, area: pygame.Rect) -> int:
+    """数区域里正好等于 ``color`` 的像素个数（开关是不带抗锯齿的纯几何绘制）。"""
+    return sum(
+        1
+        for x in range(area.left, area.right)
+        for y in range(area.top, area.bottom)
+        if surface.get_at((x, y))[:3] == color
+    )
+
+
+def test_guide_toggle_sits_in_the_bottom_right_corner() -> None:
+    """开关摆在窗口右下角，且不压信息栏、重新开始按钮与教程提示条。"""
+    toggle = ui.guide_toggle_rect()
+
+    assert toggle.centerx > config.WINDOW_WIDTH // 2
+    assert toggle.centery > config.WINDOW_HEIGHT // 2
+    assert config.WINDOW_WIDTH - toggle.right <= config.HUD_PADDING
+    assert config.WINDOW_HEIGHT - toggle.bottom <= 16, "它要贴着底边：下面没地方了"
+    assert not toggle.colliderect(ui.hud_rect())
+    assert not toggle.colliderect(ui.restart_button_rect())
+    assert not toggle.colliderect(ui.tutorial_panel_rect())
+
+
+def test_guide_toggle_never_covers_a_cell() -> None:
+    """开关必须落在棋盘外面：最大的棋盘（6x6）最后一排格子一直铺到 y=674。
+
+    垂直留白因此只有 8px，这条测试对内置关卡逐一核对，以后调棋盘布局、
+    调格子尺寸或改开关尺寸时都会第一时间报警。
+    """
+    toggle = ui.guide_toggle_rect()
+    for index in range(len(LEVELS)):
+        board = Session(ui.board_area(), level_index=index).board
+        for row in range(board.rows):
+            for col in range(board.cols):
+                assert not toggle.colliderect(board.cell_rect(row, col)), (
+                    f"第 {index + 1} 关的 ({row}, {col}) 被辅助线开关压住了"
+                )
+
+
+def test_guide_toggle_content_fits_inside_the_pill() -> None:
+    """胶囊里“文字 + 轨道”排得下：加字或改宽度前先看这里。"""
+    pill = ui.guide_toggle_rect()
+    track = ui._guide_toggle_track_rect()
+    label = ui._font(ui._FONT_LABEL).render(
+        config.GUIDE_TOGGLE_LABEL, True, config.COLOR_TEXT
+    )
+
+    assert pill.contains(track)
+    assert track.centery == pill.centery
+    assert label.get_width() + config.GUIDE_TOGGLE_PADDING <= track.left - pill.left
+    assert 2 * config.GUIDE_TOGGLE_KNOB_RADIUS + 2 <= track.height, "滑块要放得进轨道"
+
+
 def test_start_button_is_centered_above_the_footer_button() -> None:
     button = ui.start_button_rect()
     footer = ui.about_button_rect()
@@ -235,6 +291,13 @@ def test_menu_pages_report_content_from_the_session() -> None:
     assert any("共 12 关" in line and "5 次" in line for line in lines)
 
 
+def test_about_screen_documents_the_guide_switch() -> None:
+    """辅助线是可选功能，因此“关于”界面必须写明开关在哪。"""
+    lines = [line for section in ui.about_page(3, 3).sections for line in section.lines]
+
+    assert any("辅助线" in line and "右下角" in line for line in lines)
+
+
 def test_menu_pages_pick_a_default_action_for_enter() -> None:
     """Enter / 空格触发页面的默认按钮：开始界面是“开始游戏”，关于界面是“返回”。"""
     assert ui.start_page(3, 3).default_action() == "start"
@@ -322,6 +385,31 @@ def test_draw_hud_renders_without_error() -> None:
     ui.draw_hud(surface, _session(), mouse=ui.hud_home_button_rect().center)
 
 
+def test_draw_guide_toggle_shows_both_positions() -> None:
+    """开关的“开 / 关”两档在画面上真的不一样：轨道换颜色，滑块也换边。"""
+    pill = ui.guide_toggle_rect()
+
+    on = _surface()
+    ui.draw_guide_toggle(on, True)
+    off = _surface()
+    ui.draw_guide_toggle(off, False)
+
+    assert _color_hits(on, config.GUIDE_TOGGLE_TRACK_ON, pill) > 0, "打开后轨道是青绿色"
+    assert _color_hits(off, config.GUIDE_TOGGLE_TRACK_OFF, pill) > 0, "关着时轨道是暗灰"
+    assert _color_hits(off, config.GUIDE_TOGGLE_TRACK_ON, pill) == 0
+    assert pygame.image.tobytes(on, "RGB") != pygame.image.tobytes(off, "RGB")
+
+
+def test_draw_guide_toggle_highlights_on_hover() -> None:
+    pill = ui.guide_toggle_rect()
+    idle = _surface()
+    ui.draw_guide_toggle(idle, False)
+    hovered = _surface()
+    ui.draw_guide_toggle(hovered, False, pill.center)
+
+    assert pygame.image.tobytes(idle, "RGB") != pygame.image.tobytes(hovered, "RGB")
+
+
 @pytest.mark.parametrize("status", list(GameStatus))
 def test_draw_ui_renders_in_every_state(status: GameStatus) -> None:
     surface = _surface()
@@ -331,6 +419,8 @@ def test_draw_ui_renders_in_every_state(status: GameStatus) -> None:
     ui.draw_ui(surface, session)
     ui.draw_ui(surface, session, mouse=ui.overlay_button_rect().center)
     ui.draw_ui(surface, session, mouse=ui.overlay_home_button_rect().center)
+    ui.draw_ui(surface, session, show_guides=True)
+    ui.draw_ui(surface, session, ui.guide_toggle_rect().center, show_guides=True)
 
 
 def test_overlay_paints_a_shade_over_the_whole_window() -> None:

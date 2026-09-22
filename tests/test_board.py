@@ -555,3 +555,207 @@ def test_flying_arrow_keeps_its_theme_color() -> None:
     assert flying.progress == 0.0  # 动画刚开始，箭头完全不透明
     position = (round(flying.position[0]), round(flying.position[1]))
     assert _pixel_at(_render(board), position) == board.arrow_color(arrow)
+
+
+# ---------------------------------------------------------------- 辅助线
+
+
+def _panel(board: Board) -> pygame.Rect:
+    """棋盘可见区域的边缘（与 ``Board.draw`` 画底板时用的是同一个矩形）。"""
+    return board.rect.inflate(2 * config.CELL_GAP, 2 * config.CELL_GAP)
+
+
+def _blank_surface() -> pygame.Surface:
+    surface = pygame.Surface(AREA.size)
+    surface.fill((0, 0, 0))
+    return surface
+
+
+def _color_hits(surface: pygame.Surface, color: config.Color, area: pygame.Rect) -> int:
+    """数 ``area`` 里正好等于 ``color`` 的像素个数。
+
+    辅助线是不带抗锯齿的纯几何绘制，颜色因此是精确值，直接数像素就能验证
+    “画了 / 没画”，比只断言常量更接近玩家看到的东西。
+    """
+    return sum(
+        1
+        for x in range(area.left, area.right)
+        for y in range(area.top, area.bottom)
+        if _pixel_at(surface, (x, y)) == color
+    )
+
+
+def _dim(color: config.Color) -> config.Color:
+    """“开关打开但没悬停”时的淡色版辅助线颜色（与 ``Board._draw_guide`` 同一套混色）。"""
+    return palette.mix(color, config.COLOR_CELL, config.GUIDE_LINE_DIM_MIX)
+
+
+def test_guide_line_runs_from_the_arrow_to_the_board_edge() -> None:
+    """畅通的箭头：辅助线从圆片外沿一直拉到棋盘可见区域的边缘。"""
+    board = Board(LEVELS[0], AREA)
+    arrow = board.arrow_at(3, 0)  # '>'，右边三格都是空的
+    assert arrow is not None
+    assert board.is_path_clear(arrow)
+
+    line = board.guide_line(arrow)
+    cell = board.cell_rect(3, 0)
+    radius = cell.width * 0.44
+
+    assert line.arrow == arrow
+    assert line.blocked is False
+    assert line.blocker is None
+    assert line.start == pytest.approx(
+        (cell.centerx + radius + config.GUIDE_LINE_MARGIN, cell.centery)
+    )
+    assert line.end == pytest.approx((_panel(board).right, cell.centery))
+
+
+def test_guide_line_stops_on_the_arrow_that_blocks_it() -> None:
+    """被挡的箭头：辅助线停在挡路箭头的圆片外沿，不会穿过去。"""
+    board = Board(LEVELS[0], AREA)
+    blocked = board.arrow_at(0, 2)  # 'v'，正下方被 (1,2) 的 '<' 挡住
+    blocker = board.arrow_at(1, 2)
+    assert blocked is not None
+    assert blocker is not None
+    assert board.blocking_arrow(blocked) == blocker
+
+    line = board.guide_line(blocked)
+    cell = board.cell_rect(0, 2)
+    target = board.cell_rect(1, 2)
+    radius = cell.width * 0.44
+
+    assert line.blocked is True
+    assert line.blocker == blocker
+    assert line.start[0] == pytest.approx(cell.centerx)
+    assert line.end[0] == pytest.approx(cell.centerx)
+    assert line.start[1] == pytest.approx(
+        cell.centery + radius + config.GUIDE_LINE_MARGIN
+    )
+    assert line.end[1] == pytest.approx(
+        target.centery - radius - config.GUIDE_LINE_MARGIN
+    )
+    # 线确实“顶到”了阻挡者：终点落在自己格子之外、挡路箭头中心之前。
+    assert cell.bottom < line.end[1] < target.centery
+
+
+@pytest.mark.parametrize("direction", list(Direction))
+def test_guide_line_points_at_the_edge_the_arrow_faces(direction: Direction) -> None:
+    """四种朝向：辅助线都朝箭头指的那条边走，终点落在棋盘边缘上。"""
+    board = Board(("...", f".{direction.value}.", "..."), AREA)
+    arrow = board.arrow_at(1, 1)
+    assert arrow is not None
+
+    line = board.guide_line(arrow)
+    cell = board.cell_rect(1, 1)
+    panel = _panel(board)
+
+    assert line.blocked is False
+    if direction in (Direction.LEFT, Direction.RIGHT):
+        assert line.end[1] == pytest.approx(cell.centery)
+        edge = panel.right if direction is Direction.RIGHT else panel.left
+        assert line.end[0] == pytest.approx(edge)
+    else:
+        assert line.end[0] == pytest.approx(cell.centerx)
+        edge = panel.bottom if direction is Direction.DOWN else panel.top
+        assert line.end[1] == pytest.approx(edge)
+
+
+def test_guide_line_follows_the_board_after_the_blocker_is_gone() -> None:
+    """辅助线读的是“当下”的棋盘：挡路的箭头一清，线立刻通到边缘。"""
+    board = Board(CHAIN_LEVEL, AREA)
+    arrow = board.arrow_at(0, 0)
+    blocker = board.arrow_at(0, 1)
+    assert arrow is not None
+    assert blocker is not None
+
+    assert board.guide_line(arrow).blocker == blocker
+    assert _click(board, blocker) is ClickResult.CLEARED
+
+    line = board.guide_line(arrow)
+    assert line.blocked is False
+    assert line.end[0] == pytest.approx(_panel(board).right)
+
+
+def test_guides_stay_hidden_until_the_switch_is_on() -> None:
+    """辅助线是可选的：开关没打开时，连悬停的箭头也不画线。"""
+    board = Board(EDGE_LEVEL, AREA)  # 单个朝下的箭头，正下方一路畅通
+    arrow = board.arrow_at(0, 1)
+    assert arrow is not None
+    cell = board.cell_rect(0, 1)
+    # 箭头正下方的一条窄带：辅助线的虚线就落在这里，而箭头圆片够不到。
+    band = pygame.Rect(
+        cell.centerx - 3, cell.bottom, 6, board.rect.bottom - cell.bottom
+    )
+
+    surface = _blank_surface()
+    board.draw(surface, cell.center)
+    assert _color_hits(surface, config.GUIDE_LINE_COLOR_CLEAR, band) == 0
+    assert _color_hits(surface, _dim(config.GUIDE_LINE_COLOR_CLEAR), band) == 0
+
+    # 打开开关之后同样的悬停位置就有线了（下面几条测试都建立在这一步上）。
+    guides = _blank_surface()
+    board.draw(guides, cell.center, show_guides=True)
+    assert _color_hits(guides, config.GUIDE_LINE_COLOR_CLEAR, band) > 0
+
+
+def test_hovering_an_arrow_paints_a_brighter_guide_line() -> None:
+    """开关打开后：所有箭头都有线，而鼠标指着的那条用亮色画出来。"""
+    board = Board(EDGE_LEVEL, AREA)
+    arrow = board.arrow_at(0, 1)
+    assert arrow is not None
+    cell = board.cell_rect(0, 1)
+    band = pygame.Rect(
+        cell.centerx - 3, cell.bottom, 6, board.rect.bottom - cell.bottom
+    )
+    bright = config.GUIDE_LINE_COLOR_CLEAR
+    faint = _dim(bright)
+
+    no_mouse = _blank_surface()
+    board.draw(no_mouse, show_guides=True)
+    assert _color_hits(no_mouse, faint, band) > 0, "开关打开后应当有线"
+    assert _color_hits(no_mouse, bright, band) == 0, "没有悬停就没有亮色的那条"
+
+    outside = _blank_surface()
+    board.draw(outside, (0, 0), show_guides=True)
+    assert _color_hits(outside, bright, band) == 0, "棋盘外不算悬停"
+
+    hovered = _blank_surface()
+    board.draw(hovered, cell.center, show_guides=True)
+    assert _color_hits(hovered, bright, band) > 0
+    assert _color_hits(hovered, faint, band) == 0, "同一支箭头只画一条线"
+
+
+def test_hovering_a_blocked_arrow_paints_the_blocked_color() -> None:
+    """被挡住的箭头用另一种颜色表示“这一箭点不动”。"""
+    board = Board(CHAIN_LEVEL, AREA)
+    arrow = board.arrow_at(0, 0)
+    assert arrow is not None
+    cell = board.cell_rect(0, 0)
+    band = pygame.Rect(cell.right, cell.centery - 3, board.rect.right - cell.right, 6)
+
+    surface = _blank_surface()
+    board.draw(surface, cell.center, show_guides=True)
+
+    assert _color_hits(surface, config.GUIDE_LINE_COLOR_BLOCKED, band) > 0
+    assert _color_hits(surface, config.GUIDE_LINE_COLOR_CLEAR, band) == 0
+
+
+def test_the_switch_paints_every_arrow_dimmed() -> None:
+    """开关打开：畅通与被挡的箭头各有一条淡色辅助线，不会太抢眼。"""
+    board = Board(LEVELS[0], AREA)
+    region = board.rect
+    clear = _dim(config.GUIDE_LINE_COLOR_CLEAR)
+    blocked = _dim(config.GUIDE_LINE_COLOR_BLOCKED)
+
+    idle = _blank_surface()
+    board.draw(idle)
+    assert _color_hits(idle, clear, region) == 0
+    assert _color_hits(idle, blocked, region) == 0
+
+    guides = _blank_surface()
+    board.draw(guides, show_guides=True)
+    assert _color_hits(guides, clear, region) > 0, "畅通的箭头应当有线"
+    assert _color_hits(guides, blocked, region) > 0, "被挡的箭头也应当有线"
+    # 没有悬停的箭头，所有线都用淡色版；亮色只留给鼠标指着的那一条。
+    assert _color_hits(guides, config.GUIDE_LINE_COLOR_CLEAR, region) == 0
+    assert _color_hits(guides, config.GUIDE_LINE_COLOR_BLOCKED, region) == 0

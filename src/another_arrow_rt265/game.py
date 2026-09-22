@@ -15,6 +15,13 @@
 失误耗尽弹出失败卡片，可重试本关；清空全部箭头弹出通关卡片，可进入下一关。
 信息栏左上角与结算卡片上都提供“回到主界面”，随时可以退回标题画面。
 
+**辅助线**（事项 11）是一个可选功能，默认关闭：右下角有一颗常驻开关（``G`` 键同效），
+打开后每个箭头都沿当前的前进方向拉一条虚线——顶到棋盘边缘说明点得动，
+停在另一个箭头上说明点不动（见 :meth:`~another_arrow_rt265.board.Board.guide_line`），
+鼠标指着的那条更亮。开关存在 :attr:`Game.show_guides` 上，属于窗口而非关卡，
+重开本关 / 换关都不会把它关掉；它会一直摆在棋盘外面（不盖任何格子），
+棋盘点击、倒计时与失误判定都不受影响。
+
 两个菜单页的内容在 :mod:`another_arrow_rt265.ui` 里用
 :class:`~another_arrow_rt265.ui.MenuPage` 描述（有哪些说明卡片、有哪些按钮、
 按钮对应哪个动作），本模块只负责“接线”：把按钮的 ``action`` 名分发到
@@ -62,6 +69,10 @@ class Game:
         self.clock = pygame.time.Clock()
         self.running = True
         self.scene = Scene.START
+        # 辅助线开关（右下角的开关与 G 键共用）。默认关闭：它是可选功能，
+        # 而不是“默认替玩家把答案标出来”。它是窗口级的显示偏好，而不是关卡状态：
+        # 存在这里就不会因为重开本关、进入下一关而被重置。
+        self.show_guides = False
         self.session = Session(ui.board_area(), level_index=level_index)
 
     def run(self) -> None:
@@ -122,8 +133,10 @@ class Game:
 
         菜单页上的按钮来自 :class:`~another_arrow_rt265.ui.MenuPage` 的描述，
         因此新增界面时这里不必再改；游戏画面左上角与结算卡片左下角都有
-        “回到主界面”；结算界面其余区域不响应棋盘点击；第 1 关的教程提示条
-        只让“跳过教程”生效，条上的其他位置吃掉点击，免得漏到棋盘上。
+        “回到主界面”；右下角的“辅助线”开关先于棋盘判定（它摆在棋盘外面，
+        但万一以后调布局压到了棋盘，也应当是开关优先）；结算界面其余区域不响应
+        棋盘点击；第 1 关的教程提示条只让“跳过教程”生效，条上的其他位置吃掉点击，
+        免得漏到棋盘上。
         """
         if self.scene is not Scene.PLAYING:
             self._handle_menu_click(position)
@@ -140,6 +153,8 @@ class Game:
             self.return_to_start()
         elif ui.restart_button_rect().collidepoint(position):
             self.session.restart_level()
+        elif ui.guide_toggle_rect().collidepoint(position):
+            self.show_guides = not self.show_guides
         elif (
             self.session.tutorial is not None
             and ui.tutorial_panel_rect().collidepoint(position)
@@ -159,8 +174,8 @@ class Game:
     def _handle_key(self, key: int) -> None:
         """处理按键：``Esc`` 退出，``Enter`` / 空格触发主按钮，``H`` 回主界面。
 
-        ``H`` 在菜单页与游戏画面都生效；``R`` 与左右方向键只在游戏画面生效，
-        免得在开始界面误触改掉进度。
+        ``H`` 在菜单页与游戏画面都生效；``R``、``G`` 与左右方向键只在游戏画面生效，
+        免得在开始界面误触改掉进度或开关（``G`` 与右下角那颗开关是同一个开关）。
         """
         if key == pygame.K_ESCAPE:
             self.running = False
@@ -171,6 +186,8 @@ class Game:
         elif self.scene is Scene.PLAYING:
             if key == pygame.K_r:
                 self.session.restart_level()
+            elif key == pygame.K_g:
+                self.show_guides = not self.show_guides
             elif key == pygame.K_LEFT:
                 self.session.load_level(self.session.level_index - 1)
             elif key == pygame.K_RIGHT:
@@ -221,8 +238,9 @@ class Game:
         if self.scene is Scene.PLAYING:
             # 柔光跟着棋盘走，让棋盘看起来是画面的视觉中心。
             ui.draw_background(self.screen, self.session.board.rect.center)
-            self.session.board.draw(self.screen)
-            ui.draw_ui(self.screen, self.session, mouse)
+            # 鼠标位置交给棋盘：辅助线打开时，指着的那条会更亮。
+            self.session.board.draw(self.screen, mouse, show_guides=self.show_guides)
+            ui.draw_ui(self.screen, self.session, mouse, show_guides=self.show_guides)
         elif self.scene is Scene.ABOUT:
             ui.draw_about_screen(self.screen, self.session, mouse)
         else:

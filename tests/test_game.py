@@ -465,3 +465,83 @@ def test_timer_does_not_run_on_the_start_screen() -> None:
     game.return_to_start()
     game._update(1.0)
     assert game.session.elapsed == 0.0
+
+
+# ---------------------------------------------------------------- 辅助线
+
+
+def test_guides_start_switched_off() -> None:
+    """辅助线是可选功能：新窗口默认关着，开始游戏、换关也不会自己打开。"""
+    game = Game()
+    assert game.show_guides is False
+
+    game.start()
+    game.session.load_level(len(LEVELS) - 1)
+    assert game.show_guides is False
+
+
+def test_guide_key_toggles_the_guides_mode(game: Game) -> None:
+    """G 键与右下角的开关是同一个开关：按下就打开，再按就关回去。"""
+    _post_key(game, pygame.K_g)
+    assert game.show_guides is True
+
+    _post_key(game, pygame.K_g)
+    assert game.show_guides is False
+
+
+def test_clicking_the_guide_switch_toggles_the_guides(game: Game) -> None:
+    """点右下角那颗开关就能开关辅助线，且这一下不会落到棋盘上。"""
+    session = game.session
+    initial = session.arrows_left
+
+    _post_click(game, ui.guide_toggle_rect().center)
+    assert game.show_guides is True
+    assert session.arrows_left == initial, "开关这一下不该动棋盘"
+    assert session.mistakes_left == session.max_mistakes
+
+    _post_click(game, ui.guide_toggle_rect().center)
+    assert game.show_guides is False
+
+
+def test_guide_switch_is_inert_on_the_result_screen(game: Game) -> None:
+    """结算卡片弹出来之后，开关不再响应（与棋盘一样被结算层接管）。"""
+    session = game.session
+    _clear_board(session.board)
+    _settle(session)
+    assert session.status is GameStatus.LEVEL_CLEARED
+
+    _post_click(game, ui.guide_toggle_rect().center)
+    assert game.show_guides is False
+
+
+def test_guide_switch_belongs_to_the_window_not_the_level(game: Game) -> None:
+    """辅助线开关不会被重开本关、换关或回主界面重置。"""
+    _post_key(game, pygame.K_g)
+
+    _post_key(game, pygame.K_r)
+    assert game.show_guides is True, "重开本关不应该关掉辅助线"
+
+    game.session.load_level(1)
+    assert game.show_guides is True
+
+    game.return_to_start()
+    assert game.show_guides is True
+
+
+def test_guide_key_is_ignored_outside_the_board(game: Game) -> None:
+    """菜单页上按 G 不改开关（与 R、方向键一样只在游戏画面生效）。"""
+    _post_key(game, pygame.K_h)
+    assert game.scene is Scene.START
+
+    _post_key(game, pygame.K_g)
+    assert game.show_guides is False
+
+
+def test_draw_renders_a_frame_with_the_guides_switched_on(game: Game) -> None:
+    """开着辅助线画一帧不应出错（悬停位置由真实鼠标坐标给出）。"""
+    _post_key(game, pygame.K_g)
+    game._draw()
+
+    game.session.status = GameStatus.LEVEL_CLEARED
+    game._draw()
+    assert game.show_guides is True
