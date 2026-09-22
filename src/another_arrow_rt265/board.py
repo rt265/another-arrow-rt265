@@ -26,6 +26,12 @@
 绘制时按当前视口换算（见 :mod:`another_arrow_rt265.viewport`），因此窗口放大后
 格子、圆片与线宽一起等比变大，而不是把原画面拉大。窗口尺寸变化时由
 :meth:`Board.reshape` 就地重算格子尺寸，关卡进度不受影响。
+
+箭头并不填满格子：圆片半径取格子内边宽的一部分（``config.ARROW_CHIP_RATIO``），
+箭头图形再收进圆片里一点（``config.ARROW_GLYPH_RATIO``），于是箭头与格子边界（因而
+也与棋盘底板边缘）之间始终留着一圈均匀的间隔。圆片的半径由
+:meth:`Board.chip_radius` 统一给出——选中环、碰撞环、辅助线起点与挡路提示都
+按它对齐，改比例时不会有一处漏改而错位。
 """
 
 from __future__ import annotations
@@ -43,19 +49,18 @@ from another_arrow_rt265 import config, palette, sprites, viewport
 from another_arrow_rt265.direction import Direction, from_symbol
 from another_arrow_rt265.levels import Level
 
-# 以“向上”为基准的单位箭头形状，坐标原点位于格子中心，取值范围约 [-0.42, 0.42]。
+# 以“向上”为基准的单位箭头形状：坐标原点位于格子中心，**1.0 = 圆片半径**。
+# 形状自身的最大外延就是 1.0，再由 ``config.ARROW_GLYPH_RATIO`` 收到圆片内部，
+# 因此“把箭头缩小一点、与格子边界留出间隔”只需要动那个比例，图形永远装在圆片里。
 _ARROW_SHAPE: Final[tuple[tuple[float, float], ...]] = (
-    (0.00, -0.42),
-    (0.34, -0.06),
-    (0.13, -0.06),
-    (0.13, 0.40),
-    (-0.13, 0.40),
-    (-0.13, -0.06),
-    (-0.34, -0.06),
+    (0.00, -1.00),
+    (0.81, -0.14),
+    (0.31, -0.14),
+    (0.31, 0.95),
+    (-0.31, 0.95),
+    (-0.31, -0.14),
+    (-0.81, -0.14),
 )
-
-# 箭头圆片的半径相对格子内边宽的比例；圆片、辅助线起点与挡路提示都按它对齐。
-_CHIP_RADIUS_RATIO: Final[float] = 0.44
 
 # 箭头贴图的缓存上限：格子尺寸（跟着窗口缩放）+ 主题色 + 状态 + 朝向，条目有限。
 _ARROW_SPRITE_CACHE: Final[int] = 192
@@ -293,6 +298,15 @@ class Board:
             inner_size,
         )
 
+    def chip_radius(self, row: int, col: int) -> float:
+        """返回某个格子里箭头圆片的半径（像素）。
+
+        它是“箭头画多大”的**唯一入口**：圆片与图形的贴图、选中环 / 碰撞环、
+        辅助线的起点与终点、挡住提示环都按它推位置，因此箭头与格子边界之间的
+        间隔（= 格子内边宽的一半 − 圆片半径）在整块棋盘上处处一致。
+        """
+        return self.cell_rect(row, col).width * config.ARROW_CHIP_RATIO
+
     def arrow_color(self, arrow: Arrow) -> config.Color:
         """返回 ``arrow`` 的主题色（与它所在格子绑定，整关不变）。"""
         return palette.theme_color(arrow.row, arrow.col)
@@ -343,7 +357,7 @@ class Board:
         与绘制、点击判定读的是同一份坐标；线本身只是视觉提示，不改变任何状态。
         """
         cell = self.cell_rect(arrow.row, arrow.col)
-        radius = cell.width * _CHIP_RADIUS_RATIO
+        radius = self.chip_radius(arrow.row, arrow.col)
         margin = viewport.s(config.GUIDE_LINE_MARGIN)
         unit_x, unit_y = arrow.direction.vector
         center = (float(cell.centerx), float(cell.centery))
@@ -523,7 +537,7 @@ class Board:
         is_selected = arrow == self.selected
         is_blocked = arrow == self._blocked_flash
         theme = self.arrow_color(arrow)
-        radius = cell.width * _CHIP_RADIUS_RATIO
+        radius = self.chip_radius(arrow.row, arrow.col)
 
         sprite = _arrow_sprite(
             cell.width,
@@ -560,7 +574,7 @@ class Board:
 
         if is_blocked:
             _draw_impact_sparks(
-                surface, center, cell.width, arrow.direction, self.flash_progress
+                surface, center, radius, arrow.direction, self.flash_progress
             )
 
     def _draw_guides(
@@ -617,7 +631,7 @@ class Board:
         画的还是 :func:`_arrow_sprite` 那张贴图（常态配色），只是每帧复制一份调低
         整体透明度——缓存贴图不能就地改，否则会把棋盘上的箭头一起改透明。
         """
-        size = self.cell_size - 2 * viewport.s(config.CELL_GAP)
+        size = self.cell_rect(flying.arrow.row, flying.arrow.col).width
         theme = self.arrow_color(flying.arrow)
         sprite = _arrow_sprite(
             size,
@@ -652,7 +666,7 @@ class Board:
         )
         cell = self.cell_rect(blocked.row, blocked.col)
         target = self.cell_rect(blocker.row, blocker.col)
-        radius = cell.width * _CHIP_RADIUS_RATIO
+        radius = self.chip_radius(blocked.row, blocked.col)
         near = viewport.s(4.0)
         far = viewport.s(6.0)
 
@@ -680,8 +694,13 @@ def _arrow_sprite(
     这三件东西在棋盘上会反复出现（同一尺寸 + 同一主题色 + 同一状态 + 同一朝向的
     箭头长得完全一样），因此按绘制参数缓存；而选中环、碰撞环与火花每帧都在动，
     不在这里画。贴图是**共享的缓存对象**，需要改透明度（飞出动画）就自己复制一份。
+
+    ``cell_size`` 是格子内边宽：圆片半径与箭头图形都由它乘上 ``config`` 里的两个
+    比例得到（见 :meth:`Board.chip_radius`），因此贴图边缘与格子边框之间那圈留白
+    是算出来的、不是碰巧留出来的。
     """
-    radius = round(cell_size * _CHIP_RADIUS_RATIO)
+    radius = round(cell_size * config.ARROW_CHIP_RATIO)
+    extent = radius * config.ARROW_GLYPH_RATIO
     span = 2 * radius + 3
 
     def paint(canvas: pygame.Surface, factor: int) -> None:
@@ -691,7 +710,9 @@ def _arrow_sprite(
             canvas, border, center, radius * factor, width=border_width * factor
         )
         pygame.draw.polygon(
-            canvas, glyph, _arrow_points(center, cell_size * factor, direction)
+            canvas,
+            glyph,
+            _arrow_points(center, extent * factor, direction),
         )
 
     return sprites.render((span, span), paint)
@@ -742,10 +763,14 @@ def _parse_level(level: Level) -> list[list[Arrow | None]]:
 
 def _arrow_points(
     center: tuple[float, float],
-    size: int,
+    extent: float,
     direction: Direction,
 ) -> list[tuple[int, int]]:
-    """计算箭头多边形在屏幕坐标下的顶点。"""
+    """计算箭头多边形在屏幕坐标下的顶点。
+
+    ``extent`` 是图形自身的最大外延（像素），即 :data:`_ARROW_SHAPE` 里 1.0
+    对应的长度；它比圆片半径小一点，图形因此整个装在圆片里。
+    """
     radians = math.radians(direction.angle)
     cos_angle, sin_angle = math.cos(radians), math.sin(radians)
     center_x, center_y = center
@@ -755,7 +780,7 @@ def _arrow_points(
         rotated_x = x * cos_angle - y * sin_angle
         rotated_y = x * sin_angle + y * cos_angle
         points.append(
-            (round(center_x + rotated_x * size), round(center_y + rotated_y * size))
+            (round(center_x + rotated_x * extent), round(center_y + rotated_y * extent))
         )
     return points
 
@@ -763,7 +788,7 @@ def _arrow_points(
 def _draw_impact_sparks(
     surface: pygame.Surface,
     center: tuple[float, float],
-    cell_size: int,
+    radius: float,
     direction: Direction,
     progress: float,
 ) -> None:
@@ -771,6 +796,9 @@ def _draw_impact_sparks(
 
     火花长度与偏移都随 ``progress``（0.0 → 1.0）收缩到贴住箭头边缘，
     与碰撞提示同时结束，不需要单独的状态。三道火花都是斜线，因此用抗锯齿的折线画。
+
+    起止位置都按圆片的 ``radius`` 取，而不是按格子尺寸：箭头缩小之后火花跟着收，
+    不会出现“火花比箭头还长”的比例失调。
     """
     envelope = 1.0 - progress
     if envelope <= 0.0:
@@ -778,13 +806,12 @@ def _draw_impact_sparks(
 
     unit_x, unit_y = direction.vector
     base_angle = math.atan2(unit_y, unit_x)
-    radius = cell_size * _CHIP_RADIUS_RATIO
     width = viewport.s(2)
     for offset_angle in (-0.5, 0.0, 0.5):
         angle = base_angle + offset_angle
         cos_angle, sin_angle = math.cos(angle), math.sin(angle)
         inner = radius * 1.02
-        outer = inner + cell_size * (0.06 + 0.14 * envelope)
+        outer = inner + radius * (0.15 + 0.35 * envelope)
         pygame.draw.aaline(
             surface,
             config.COLOR_BLOCKED_SPARK,

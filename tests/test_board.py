@@ -577,6 +577,67 @@ def test_arrow_chips_are_anti_aliased() -> None:
     assert len(colors) > 10, f"格子里只有 {len(colors)} 种颜色，边缘是硬边的"
 
 
+# ---------------------------------------------------------------- 箭头尺寸
+
+
+# 从格子边框往里扫描时跳过的像素数：格子贴图自己边缘那一两像素是抗锯齿的
+# 过渡色（格子底色与底板色的混合），不能把它当成“箭头画到了这里”。
+_EDGE_TOLERANCE = 2
+
+# 箭头离格子边框至少留出内边宽的这个比例。这是 Priority 第 14 条
+# （“调整箭头大小，与边界保持一定间隔”）的量化下限：箭头不填满格子，
+# 也不顶到棋盘底板边缘。旧观感（圆片半径 = 内边宽 × 0.44）只有 6%，会卡在这里。
+_MIN_ARROW_GAP_RATIO = 0.08
+
+
+def test_arrows_keep_a_gap_from_the_cell_border() -> None:
+    """箭头（圆片 + 图形）与格子边界之间必须留出间隔。
+
+    量的是真正画出来的像素：沿格子的四条**中线**从边上往中心扫，第一条不是格子底色的
+    像素就是圆片外沿。它到边框的距离要同时满足两件事：
+
+    - **至少** ``_MIN_ARROW_GAP_RATIO × 内边宽``——“箭头不能填满格子”；
+    - 与 ``config.ARROW_CHIP_RATIO`` 推出来的值一致——保证 config 里的比例就是画出来的比例，
+      不会出现“改了常量但绘制路径没跟着改”。
+
+    容差 2px：圆片自己也有一个像素左右的过渡色，格子尺寸又是整数除出来的。
+    """
+    for index, level in enumerate(LEVELS, start=1):
+        board = Board(level, AREA)
+        arrow = next(iter(board))
+        surface = _render(board)
+        cell = board.cell_rect(arrow.row, arrow.col)
+
+        horizontal = [
+            x
+            for x in range(cell.left + _EDGE_TOLERANCE, cell.right - _EDGE_TOLERANCE)
+            if _pixel_at(surface, (x, cell.centery)) != config.COLOR_CELL
+        ]
+        vertical = [
+            y
+            for y in range(cell.top + _EDGE_TOLERANCE, cell.bottom - _EDGE_TOLERANCE)
+            if _pixel_at(surface, (cell.centerx, y)) != config.COLOR_CELL
+        ]
+        assert horizontal and vertical, f"第 {index} 关的格子里扫不到箭头像素"
+
+        floor = cell.width * _MIN_ARROW_GAP_RATIO
+        expected = cell.width * (0.5 - config.ARROW_CHIP_RATIO)
+        gaps = (
+            horizontal[0] - cell.left,
+            cell.right - 1 - horizontal[-1],
+            vertical[0] - cell.top,
+            cell.bottom - 1 - vertical[-1],
+        )
+        for gap in gaps:
+            assert gap >= floor, (
+                f"第 {index} 关：箭头离格子边框只有 {gap}px"
+                f"（内边宽 {cell.width}px，下限 {floor:.1f}px），箭头填满格子了"
+            )
+            assert gap == pytest.approx(expected, abs=2), (
+                f"第 {index} 关：箭头离格子边框 {gap}px，期望约 {expected}px"
+            )
+
+
 # ---------------------------------------------------------------- 辅助线
 
 
@@ -619,7 +680,7 @@ def test_guide_line_runs_from_the_arrow_to_the_board_edge() -> None:
 
     line = board.guide_line(arrow)
     cell = board.cell_rect(3, 0)
-    radius = cell.width * 0.44
+    radius = board.chip_radius(3, 0)
 
     assert line.arrow == arrow
     assert line.blocked is False
@@ -642,7 +703,7 @@ def test_guide_line_stops_on_the_arrow_that_blocks_it() -> None:
     line = board.guide_line(blocked)
     cell = board.cell_rect(0, 2)
     target = board.cell_rect(1, 2)
-    radius = cell.width * 0.44
+    radius = board.chip_radius(0, 2)
 
     assert line.blocked is True
     assert line.blocker == blocker
