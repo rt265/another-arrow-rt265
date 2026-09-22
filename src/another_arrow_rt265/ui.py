@@ -57,17 +57,37 @@ _FONT_CANDIDATES: Final[tuple[str, ...]] = (
     "wenquanyimicrohei",
 )
 
-_FONT_CAPTION: Final[int] = 16
-_FONT_LABEL: Final[int] = 15
-_FONT_CHIP_VALUE: Final[int] = 24
-_FONT_BUTTON: Final[int] = 20
-_FONT_TITLE: Final[int] = 36
-_FONT_BODY: Final[int] = 20
 
-_FONT_HERO: Final[int] = 68
-_FONT_SUBTITLE: Final[int] = 20
-_FONT_RULE_TITLE: Final[int] = 19
-_FONT_RULE: Final[int] = 17
+@dataclass(frozen=True)
+class _TextStyle:
+    """一处界面文字的样式：**字号 + 字重**，两件事各管一层信息。
+
+    字号分层级（标题 / 数值 / 正文 / 标签），字重强调重点（见下表的取舍）。
+    想改某处文字的“轻重”，先想清楚它在界面里是主角还是配角，再动这里的表。
+    """
+
+    size: int
+    weight: resources.FontWeight = resources.DEFAULT_WEIGHT
+
+    def font(self) -> pygame.font.Font:
+        """返回这个样式对应的字体对象（按“字号 + 字重”缓存，见 :func:`_font`）。"""
+        return _font(self.size, self.weight)
+
+
+# 界面文字的字号与字重一览。共用同一套字重的文字写在同一行，读的时候按“角色”找：
+# Bold 负责“标题 / 数值 / 按钮 / 卡片小标题”，Regular 负责“正文与标签”，
+# Light 只用在**弱化的次要文字**上（英文副标题、页脚提示）——它们本来就该退到背景里。
+_TEXT_HERO: Final[_TextStyle] = _TextStyle(68, resources.FontWeight.BOLD)
+_TEXT_SUBTITLE: Final[_TextStyle] = _TextStyle(20, resources.FontWeight.LIGHT)
+_TEXT_TITLE: Final[_TextStyle] = _TextStyle(36, resources.FontWeight.BOLD)
+_TEXT_BODY: Final[_TextStyle] = _TextStyle(20)
+_TEXT_BUTTON: Final[_TextStyle] = _TextStyle(20, resources.FontWeight.BOLD)
+_TEXT_SECTION_TITLE: Final[_TextStyle] = _TextStyle(19, resources.FontWeight.BOLD)
+_TEXT_RULE: Final[_TextStyle] = _TextStyle(17)
+_TEXT_HINT: Final[_TextStyle] = _TextStyle(16, resources.FontWeight.LIGHT)
+_TEXT_LABEL: Final[_TextStyle] = _TextStyle(15)
+_TEXT_PROGRESS: Final[_TextStyle] = _TextStyle(15, resources.FontWeight.BOLD)
+_TEXT_VALUE: Final[_TextStyle] = _TextStyle(24, resources.FontWeight.BOLD)
 
 # 信息栏：左上角“回到主界面”图标按钮、四块统计卡片（关卡 / 剩余箭头 / 用时 /
 # 失误）与右侧“重新开始”按钮。窗口宽度有限，四块卡片加两个按钮刚好铺满一行：
@@ -141,7 +161,11 @@ _HERO_DIRECTIONS: Final[tuple[Direction, ...]] = (
 # 说明卡片：一行小标题 + 若干行带圆点的正文。高度按正文行数推出来——
 # 小标题占 66px，之后每行 30px，行文字本身按 24px 算（17 号字的高度），
 # 最后留 8px 底边距，于是三行正文刚好是 158px，与旧的“玩法”卡片一样高。
-_SECTION_WIDTH: Final[int] = 540
+# 宽度则按“最宽的正文放得下”倒推：最宽的一行是关于界面的仓库地址（拉丁字母），
+# 17 号 Regular 量到 474px，加上圆点缩进 22 与两侧内边距 28×2 共需 552px。
+# 原来的 540 是按可变字体的拉丁字宽定的，换成静态字重后拉丁字形宽了一点（453 → 474），
+# 因此留到 576（两侧各 72px 外边距）。
+_SECTION_WIDTH: Final[int] = 576
 _SECTION_RADIUS: Final[int] = 24
 _SECTION_PADDING: Final[int] = 28
 _SECTION_CAPTION_TOP: Final[int] = 20
@@ -304,22 +328,37 @@ def about_page(total_levels: int, max_mistakes: int) -> MenuPage:
     )
 
 
-@functools.cache
-def _font(size: int) -> pygame.font.Font:
-    """按字号取字体（带缓存）。
+def _weight_fallbacks(
+    weight: resources.FontWeight,
+) -> tuple[resources.FontWeight, ...]:
+    """返回字重的降级顺序：想要的那个 → 常规字重（少了 Light 也不至于没字可用）。"""
+    if weight == resources.DEFAULT_WEIGHT:
+        return (resources.DEFAULT_WEIGHT,)
+    return (weight, resources.DEFAULT_WEIGHT)
 
-    优先使用随程序分发的字体（``assets/fonts``，见 :func:`resources.font_path`）：
-    这样界面文字在任何机器上都长一个样，不依赖别人装没装中文字体。
-    字体文件缺失时才退回系统的中文字体；再没有就退回 pygame 内置字体，
-    此时中文会显示为占位方块，但界面结构依旧完整。
+
+@functools.cache
+def _font(
+    size: int, weight: resources.FontWeight = resources.DEFAULT_WEIGHT
+) -> pygame.font.Font:
+    """按“字号 + 字重”取字体（带缓存）。
+
+    优先使用随程序分发的静态字重（``assets/fonts/NotoSansCJKsc-<字重>.otf``，见
+    :func:`resources.font_path`）：这样界面文字在任何机器上都长一个样，不依赖别人装没装
+    中文字体。这个字重的文件缺失时先退回常规字重，再退回系统的中文字体；再没有就退回
+    pygame 内置字体，此时中文会显示为占位方块，但界面结构依旧完整。
     """
     if not pygame.font.get_init():
         pygame.font.init()
-    bundled = resources.font_path()
-    if bundled is not None:
-        return pygame.font.Font(str(bundled), size)
+    for candidate in _weight_fallbacks(weight):
+        bundled = resources.font_path(candidate)
+        if bundled is not None:
+            return pygame.font.Font(str(bundled), size)
     system = pygame.font.match_font(list(_FONT_CANDIDATES))
-    return pygame.font.Font(system, size) if system else pygame.font.Font(None, size)
+    font = pygame.font.Font(system or None, size)
+    # 系统字体没有静态字重可选，Bold 只能用合成加粗近似（兜底路径，正常跑不到这里）。
+    font.set_bold(weight == resources.FontWeight.BOLD)
+    return font
 
 
 @functools.lru_cache(maxsize=1)
@@ -931,7 +970,7 @@ def draw_guide_toggle(
         shadow_spread=6,
     )
 
-    label = _font(_FONT_LABEL).render(
+    label = _TEXT_LABEL.font().render(
         config.GUIDE_TOGGLE_LABEL,
         True,
         config.COLOR_TEXT if enabled else config.COLOR_TEXT_MUTED,
@@ -998,7 +1037,7 @@ def draw_tutorial(
     )
 
     # 左侧进度读数 → 竖分隔线 → 指引文案 → 右侧“跳过教程”，一行排开。
-    progress_label = _font(_FONT_LABEL).render(
+    progress_label = _TEXT_PROGRESS.font().render(
         hint.progress, True, config.COLOR_PRIMARY
     )
     surface.blit(
@@ -1019,7 +1058,7 @@ def draw_tutorial(
         (divider_x, panel.top + 10),
         (divider_x, panel.bottom - 10),
     )
-    text = _font(_FONT_RULE).render(hint.text, True, config.COLOR_TEXT)
+    text = _TEXT_RULE.font().render(hint.text, True, config.COLOR_TEXT)
     surface.blit(
         text,
         text.get_rect(midleft=(divider_x + _TUTORIAL_DIVIDER_GAP, panel.centery)),
@@ -1125,19 +1164,19 @@ def draw_overlay(
         surface, (card.centerx, card.top + _CARD_EMBLEM_TOP), accent, cleared
     )
 
-    title = _font(_FONT_TITLE).render(
+    title = _TEXT_TITLE.font().render(
         "关卡完成！" if cleared else "挑战失败", True, accent
     )
     surface.blit(
         title, title.get_rect(center=(card.centerx, card.top + _CARD_TITLE_TOP))
     )
 
-    body = _font(_FONT_BODY).render(_result_message(session), True, config.COLOR_TEXT)
+    body = _TEXT_BODY.font().render(_result_message(session), True, config.COLOR_TEXT)
     surface.blit(body, body.get_rect(center=(card.centerx, card.top + _CARD_BODY_TOP)))
 
     # 刷新记录时这行改用主色（金），一眼就能看出“这把比之前快”。
     record = session.status is GameStatus.LEVEL_CLEARED and session.is_new_record
-    timing = _font(_FONT_BODY).render(
+    timing = _TEXT_BODY.font().render(
         result_time_text(session),
         True,
         config.COLOR_PRIMARY if record else config.COLOR_TEXT_MUTED,
@@ -1227,7 +1266,7 @@ def draw_menu_page(
     for rect, section in zip(layout.sections, page.sections, strict=True):
         _draw_section_panel(surface, rect, section)
     if layout.hint is not None and page.hint is not None:
-        hint = _font(_FONT_CAPTION).render(page.hint, True, config.COLOR_TEXT_MUTED)
+        hint = _TEXT_HINT.font().render(page.hint, True, config.COLOR_TEXT_MUTED)
         surface.blit(hint, hint.get_rect(center=layout.hint.center))
     for button, rect in layout.buttons:
         _draw_menu_button(surface, button, rect, mouse)
@@ -1271,14 +1310,14 @@ def _draw_page_title(surface: pygame.Surface, page: MenuPage) -> None:
     """画菜单页的标题：金色柔光垫底 + 主色文字 + 拉开字距的英文副标题。"""
     center_x = config.WINDOW_WIDTH // 2
 
-    glow = _font(_FONT_HERO).render(page.title, True, config.COLOR_PRIMARY)
+    glow = _TEXT_HERO.font().render(page.title, True, config.COLOR_PRIMARY)
     glow.set_alpha(_PAGE_GLOW_ALPHA)
     surface.blit(glow, glow.get_rect(center=(center_x, _PAGE_TITLE_Y + 4)))
 
-    title = _font(_FONT_HERO).render(page.title, True, config.COLOR_TEXT)
+    title = _TEXT_HERO.font().render(page.title, True, config.COLOR_TEXT)
     surface.blit(title, title.get_rect(center=(center_x, _PAGE_TITLE_Y)))
 
-    subtitle = _font(_FONT_SUBTITLE).render(
+    subtitle = _TEXT_SUBTITLE.font().render(
         " ".join(page.subtitle), True, config.COLOR_TEXT_MUTED
     )
     surface.blit(subtitle, subtitle.get_rect(center=(center_x, _PAGE_SUBTITLE_Y)))
@@ -1330,14 +1369,14 @@ def _draw_section_panel(
         shadow_spread=10,
     )
 
-    caption = _font(_FONT_RULE_TITLE).render(
+    caption = _TEXT_SECTION_TITLE.font().render(
         section.caption, True, config.COLOR_PRIMARY
     )
     surface.blit(
         caption, (rect.left + _SECTION_PADDING, rect.top + _SECTION_CAPTION_TOP)
     )
 
-    font = _font(_FONT_RULE)
+    font = _TEXT_RULE.font()
     bullet_x = rect.left + _SECTION_PADDING + 6
     text_x = rect.left + _SECTION_PADDING + 22
     for index, line in enumerate(section.lines):
@@ -1404,10 +1443,10 @@ def _draw_stat_chip(
     """
     _draw_chip_frame(surface, rect)
     surface.blit(
-        _font(_FONT_LABEL).render(caption, True, config.COLOR_TEXT_MUTED),
+        _TEXT_LABEL.font().render(caption, True, config.COLOR_TEXT_MUTED),
         (rect.left + _HUD_CHIP_PADDING, rect.top + _HUD_CHIP_CAPTION_TOP),
     )
-    label = _font(_FONT_CHIP_VALUE).render(value, True, value_color)
+    label = _TEXT_VALUE.font().render(value, True, value_color)
     left = (
         rect.right - _HUD_CHIP_PADDING - label.get_width()
         if align_right
@@ -1426,7 +1465,7 @@ def _draw_mistake_chip(
     """
     _draw_chip_frame(surface, rect)
     surface.blit(
-        _font(_FONT_LABEL).render("失误", True, config.COLOR_TEXT_MUTED),
+        _TEXT_LABEL.font().render("失误", True, config.COLOR_TEXT_MUTED),
         (rect.left + _HUD_CHIP_PADDING, rect.top + _HUD_CHIP_CAPTION_TOP),
     )
 
@@ -1548,7 +1587,7 @@ def _draw_compact_button(
         shadow=False,
     )
     _draw_button_content(
-        surface, rect, text, config.COLOR_BUTTON_TEXT, font_size=_FONT_LABEL
+        surface, rect, text, config.COLOR_BUTTON_TEXT, style=_TEXT_LABEL
     )
 
 
@@ -1558,10 +1597,10 @@ def _draw_button_content(
     text: str,
     color: config.Color,
     icon: icons.Icon | None = None,
-    font_size: int = _FONT_BUTTON,
+    style: _TextStyle = _TEXT_BUTTON,
 ) -> None:
     """把“图标 + 文字”当成一个整体在按钮里居中。"""
-    label = _font(font_size).render(text, True, color)
+    label = style.font().render(text, True, color)
     content_width = label.get_width()
     if icon is not None:
         content_width += _BUTTON_ICON_SIZE + _BUTTON_ICON_GAP

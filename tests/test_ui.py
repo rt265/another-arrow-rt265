@@ -125,7 +125,7 @@ def test_hud_row_fills_the_window_exactly() -> None:
 def test_timer_chip_has_room_for_a_long_time_reading() -> None:
     """计时读数会越走越长，卡片至少要放得下 100 分钟以内的读数。"""
     *_, elapsed, _ = ui.hud_chip_rects()
-    widest = ui._font(ui._FONT_CHIP_VALUE).render(
+    widest = ui._TEXT_VALUE.font().render(
         ui.elapsed_text(5999.9), True, config.COLOR_TIME
     )
     assert widest.get_width() + 2 * ui._HUD_CHIP_PADDING <= elapsed.width
@@ -177,7 +177,7 @@ def test_guide_toggle_content_fits_inside_the_pill() -> None:
     """胶囊里“文字 + 轨道”排得下：加字或改宽度前先看这里。"""
     pill = ui.guide_toggle_rect()
     track = ui._guide_toggle_track_rect()
-    label = ui._font(ui._FONT_LABEL).render(
+    label = ui._TEXT_LABEL.font().render(
         config.GUIDE_TOGGLE_LABEL, True, config.COLOR_TEXT
     )
 
@@ -278,13 +278,13 @@ def test_menu_page_text_fits_inside_its_section() -> None:
         for rect, section in zip(
             ui.menu_layout(page).sections, page.sections, strict=True
         ):
-            caption = ui._font(ui._FONT_RULE_TITLE).render(
+            caption = ui._TEXT_SECTION_TITLE.font().render(
                 section.caption, True, config.COLOR_PRIMARY
             )
             assert caption.get_width() + 2 * ui._SECTION_PADDING <= rect.width
 
             for line in section.lines:
-                label = ui._font(ui._FONT_RULE).render(line, True, config.COLOR_TEXT)
+                label = ui._TEXT_RULE.font().render(line, True, config.COLOR_TEXT)
                 # 正文比小标题多缩进 22px（圆点与间隙），两侧再各留一份卡片内边距。
                 assert label.get_width() + 2 * ui._SECTION_PADDING + 22 <= rect.width, (
                     line

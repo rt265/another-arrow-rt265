@@ -1,7 +1,7 @@
-"""自带素材（字体）的定位与使用测试。
+"""自带素材（三个静态字重字体）的定位与使用测试。
 
 界面文字不依赖系统字体是这一部分的核心承诺，因此这里既测“文件找得到”，
-也测“``ui`` 真的用了它”，还测“找不到时不会崩”。
+也测“``ui`` 真的用了它、而且真的用上了不同字重”，还测“找不到时不会崩”。
 """
 
 from __future__ import annotations
@@ -15,6 +15,19 @@ import pytest
 from another_arrow_rt265 import resources, ui
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+FONT_FILE_NAMES = tuple(
+    resources.font_file_name(weight) for weight in resources.BUNDLED_WEIGHTS
+)
+
+
+def _styles() -> list[ui._TextStyle]:
+    """返回 ``ui`` 里声明的全部文字样式（模块级 ``_TEXT_*`` 常量）。"""
+    return [
+        value
+        for name, value in vars(ui).items()
+        if name.startswith("_TEXT_") and isinstance(value, ui._TextStyle)
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -41,19 +54,41 @@ def _pixels(surface: pygame.Surface) -> bytes:
 # ---------------------------------------------------------------- 定位
 
 
-def test_bundled_font_is_found() -> None:
-    path = resources.font_path()
+@pytest.mark.parametrize("weight", resources.BUNDLED_WEIGHTS)
+def test_bundled_font_is_found(weight: resources.FontWeight) -> None:
+    path = resources.font_path(weight)
 
-    assert path is not None, "包内 assets/fonts 的字体没有被找到"
+    assert path is not None, f"包内 assets/fonts 的 {weight} 字体没有被找到"
     assert path.is_file()
-    assert path.parent.name == "fonts"
-    assert path == resources.asset_path(*resources.FONT_PARTS)
+    assert path.parent.name == resources.FONT_DIRECTORY
+    assert path == resources.asset_path(*resources.font_parts(weight))
 
 
-def test_bundled_assets_live_inside_the_package() -> None:
+def test_font_file_names_follow_the_weight() -> None:
+    """文件名写法只有一处定义：``NotoSansCJKsc-<字重>.otf``。"""
+    assert FONT_FILE_NAMES == (
+        "NotoSansCJKsc-Light.otf",
+        "NotoSansCJKsc-Regular.otf",
+        "NotoSansCJKsc-Bold.otf",
+    )
+    assert resources.font_parts(resources.FontWeight.BOLD) == (
+        "fonts",
+        "NotoSansCJKsc-Bold.otf",
+    )
+
+
+def test_missing_a_weight_is_a_regular_font_not_a_crash() -> None:
+    """字重是逐个文件定位的，拿不到时返回 ``None`` 而不是报错（由 ``ui`` 降级）。"""
+    assert resources.font_path(resources.FontWeight.LIGHT) is not None
+    assert resources.DEFAULT_WEIGHT == resources.FontWeight.REGULAR
+    assert resources.font_path() == resources.font_path(resources.DEFAULT_WEIGHT)
+
+
+@pytest.mark.parametrize("weight", resources.BUNDLED_WEIGHTS)
+def test_bundled_assets_live_inside_the_package(weight: resources.FontWeight) -> None:
     """素材必须落在包内：uv_build 只把包内文件（与 .data 目录）放进 wheel，
     Nuitka 的 ``--project`` 又只接受与 wheel 内容一致的数据文件声明。"""
-    path = resources.font_path()
+    path = resources.font_path(weight)
     assert path is not None
 
     assert path.is_relative_to(resources.PACKAGE_DIRECTORY)
@@ -82,11 +117,11 @@ def test_assets_next_to_the_program_are_used_as_a_fallback(
     monkeypatch.setattr(resources, "PACKAGE_DIRECTORY", tmp_path / "empty")
     packed = tmp_path / "dist"
     (packed / "assets" / "fonts").mkdir(parents=True)
-    font = packed / "assets" / "fonts" / resources.FONT_PARTS[-1]
+    font = packed / "assets" / "fonts" / resources.font_file_name()
     font.write_bytes(b"packed")
     monkeypatch.setattr(resources, "executable_directory", lambda: packed)
 
-    assert resources.asset_path(*resources.FONT_PARTS) == font
+    assert resources.font_path() == font
 
 
 def test_bundled_license_ships_next_to_the_font() -> None:
@@ -100,36 +135,61 @@ def test_bundled_license_ships_next_to_the_font() -> None:
 
 def test_the_bundled_file_really_is_the_declared_font() -> None:
     """字体文件与 ``THIRD-PARTY.md`` 里声明的是同一个：名字对得上。"""
-    path = resources.font_path()
-    assert path is not None
+    for weight in resources.BUNDLED_WEIGHTS:
+        path = resources.font_path(weight)
+        assert path is not None, weight
 
-    # 字体名表是 UTF-16BE，直接按位找 "Noto Sans CJK SC" 的编码。
-    assert "Noto Sans CJK SC".encode("utf-16-be") in path.read_bytes()
+        # 字体名表是 UTF-16BE，直接按位找 "Noto Sans CJK SC" 的编码。
+        assert "Noto Sans CJK SC".encode("utf-16-be") in path.read_bytes(), weight
 
 
 def test_third_party_notice_mentions_the_bundled_font() -> None:
     """引了第三方素材就得在 THIRD-PARTY.md 里点名（AGENTS.md 的要求）。"""
     notice = (REPO_ROOT / "THIRD-PARTY.md").read_text(encoding="utf-8")
 
-    assert resources.FONT_PARTS[-1] in notice
+    for name in FONT_FILE_NAMES:
+        assert name in notice, name
     assert "SIL OPEN FONT LICENSE" in notice
 
 
 # ---------------------------------------------------------------- 用字体
 
 
-def test_ui_draws_with_the_bundled_font(fresh_caches) -> None:
-    """``ui._font()`` 必须给出内置字体，而不是系统里随便匹配到的那一个。"""
-    path = resources.font_path()
+@pytest.mark.parametrize("weight", resources.BUNDLED_WEIGHTS)
+def test_ui_draws_with_the_bundled_font(
+    fresh_caches, weight: resources.FontWeight
+) -> None:
+    """``ui._font()`` 必须给出内置的那个字重，而不是系统里随便匹配到的那一个。"""
+    path = resources.font_path(weight)
     assert path is not None
     expected = pygame.font.Font(str(path), 24)
 
-    actual = ui._font(24)
+    actual = ui._font(24, weight)
 
     assert actual.size("关卡 剩余箭头") == expected.size("关卡 剩余箭头")
     assert _pixels(actual.render("失误", True, (255, 255, 255))) == _pixels(
         expected.render("失误", True, (255, 255, 255))
     )
+
+
+def test_the_bundled_weights_are_really_three_different_fonts(fresh_caches) -> None:
+    """三个文件必须是三种字形：同一行字用三个字重渲染，结果不能一模一样。"""
+    rendered = {
+        weight: _pixels(
+            ui._font(24, weight).render("一箭又一箭", True, (255, 255, 255))
+        )
+        for weight in resources.BUNDLED_WEIGHTS
+    }
+
+    assert len(set(rendered.values())) == len(resources.BUNDLED_WEIGHTS)
+
+
+def test_ui_styles_use_every_bundled_weight() -> None:
+    """打包了三个字重就得都用上（Light 只用在两处也算用），否则白占一份体积。"""
+    styles = _styles()
+
+    assert len(set(styles)) == len(styles), "样式表里有完全相同的两项"
+    assert {style.weight for style in styles} == set(resources.BUNDLED_WEIGHTS)
 
 
 def test_cjk_text_is_not_rendered_as_placeholders(fresh_caches) -> None:
@@ -145,7 +205,7 @@ def test_font_falls_back_when_the_bundled_file_is_missing(
     fresh_caches, monkeypatch
 ) -> None:
     """字体文件缺失时退回系统字体／pygame 内置字体，界面不能直接崩掉。"""
-    monkeypatch.setattr(resources, "font_path", lambda: None)
+    monkeypatch.setattr(resources, "font_path", lambda *args: None)
 
     font = ui._font(20)
 
@@ -153,20 +213,52 @@ def test_font_falls_back_when_the_bundled_file_is_missing(
     assert font.render("关卡", True, (255, 255, 255)).get_width() > 0
 
 
+def test_a_missing_weight_falls_back_to_the_regular_one(
+    fresh_caches, monkeypatch
+) -> None:
+    """只少了某个字重的文件时降级用常规字重，而不是整块退到系统字体。"""
+    real = resources.font_path
+    monkeypatch.setattr(
+        resources,
+        "font_path",
+        lambda weight=resources.DEFAULT_WEIGHT: (
+            None if weight == resources.FontWeight.LIGHT else real(weight)
+        ),
+    )
+
+    text = "关卡"
+    faded = ui._font(20, resources.FontWeight.LIGHT).render(text, True, (255, 255, 255))
+    regular = ui._font(20).render(text, True, (255, 255, 255))
+
+    assert _pixels(faded) == _pixels(regular)
+
+
 def test_font_objects_are_cached(fresh_caches) -> None:
     assert ui._font(17) is ui._font(17)
     assert ui._font(17) is not ui._font(18)
+    assert ui._font(17) is not ui._font(17, resources.FontWeight.BOLD)
 
 
 def test_font_sizes_stay_readable(fresh_caches) -> None:
     """换字体后行高不缩水：界面里用来排版的行高不能比默认字体还小。"""
-    for size in (15, 17, 20, 24, 36, 68):
-        assert ui._font(size).get_height() >= size + 4, f"字号 {size} 的行高异常"
+    for style in _styles():
+        assert style.font().get_height() >= style.size + 4, (
+            f"字号 {style.size} 的行高异常"
+        )
 
 
-def test_assets_font_directory_holds_exactly_the_declared_font() -> None:
-    """包内 ``assets/fonts`` 里只有声明过的那一个字体，不留没用上（也没声明）的文件。"""
-    fonts_dir = resources.PACKAGE_DIRECTORY / resources.ASSETS_DIRECTORY / "fonts"
+def test_assets_font_directory_holds_exactly_the_declared_fonts() -> None:
+    """包内 ``assets/fonts`` 里只有声明过、且真的在用的那几个字重。
 
-    assert (fonts_dir / resources.FONT_PARTS[-1]).is_file()
-    assert [p.name for p in fonts_dir.glob("*.otf")] == [resources.FONT_PARTS[-1]]
+    多放一个未声明的字重，``--include-package-data`` 会把它原样搬进 wheel 与产物
+    （白占十几 MB），也过不了 ``THIRD-PARTY.md`` 那份登记。
+    """
+    fonts_dir = (
+        resources.PACKAGE_DIRECTORY
+        / resources.ASSETS_DIRECTORY
+        / resources.FONT_DIRECTORY
+    )
+
+    assert sorted(path.name for path in fonts_dir.glob("*.otf")) == sorted(
+        FONT_FILE_NAMES
+    )

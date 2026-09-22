@@ -328,7 +328,7 @@ def test_tutorial_text_fits_beside_the_skip_button(text: str) -> None:
     panel = ui.tutorial_panel_rect()
     skip = ui.tutorial_skip_button_rect()
 
-    progress_label = ui._font(ui._FONT_LABEL).render(
+    progress_label = ui._TEXT_PROGRESS.font().render(
         "1 / 3", True, config.COLOR_PRIMARY
     )
     text_left = (
@@ -337,7 +337,7 @@ def test_tutorial_text_fits_beside_the_skip_button(text: str) -> None:
         + progress_label.get_width()
         + 2 * ui._TUTORIAL_DIVIDER_GAP
     )
-    label = ui._font(ui._FONT_RULE).render(text, True, config.COLOR_TEXT)
+    label = ui._TEXT_RULE.font().render(text, True, config.COLOR_TEXT)
 
     assert text_left + label.get_width() <= skip.left, text
 
