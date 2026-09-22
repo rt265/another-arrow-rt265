@@ -11,9 +11,11 @@ The following open source components are included in this product:
    Source: https://github.com/notofonts/noto-cjk
    License: SIL OPEN FONT LICENSE Version 1.1
    Copyright: Copyright 2018 The Noto Project Authors (github.com/googlei18n/noto-fonts)
-   Files: src/another_arrow_rt265/assets/fonts/NotoSansCJKsc-VF.otf
-          (bundled unmodified, used as the UI font; the license text is
-          distributed alongside it as
+   Files: src/another_arrow_rt265/assets/fonts/NotoSansCJKsc-Light.otf
+          src/another_arrow_rt265/assets/fonts/NotoSansCJKsc-Regular.otf
+          src/another_arrow_rt265/assets/fonts/NotoSansCJKsc-Bold.otf
+          (three static weights bundled unmodified and used as the UI font;
+          the license text is distributed alongside them as
           src/another_arrow_rt265/assets/fonts/LICENSE)
 
 2. Component Name: <component-name>
@@ -38,9 +40,6 @@ corresponding license appendix or license files distributed with this product.
    来源：https://github.com/notofonts/noto-cjk
    License：SIL OPEN FONT LICENSE Version 1.1
    版权声明：Copyright 2018 The Noto Project Authors (github.com/googlei18n/noto-fonts)
-   文件：src/another_arrow_rt265/assets/fonts/NotoSansCJKsc-VF.otf
-         （原样打包，未作任何修改，用作界面字体；
-          License 正文随字体一同分发于 src/another_arrow_rt265/assets/fonts/LICENSE）
 
 2. 组件名称：<component-name>
    版本：<version>
@@ -49,5 +48,3 @@ corresponding license appendix or license files distributed with this product.
    版权声明：<copyright-notice-if-applicable>
 
 相关 License 正文及附加声明，见本产品随附的第三方 License 文件或声明附件
-（随程序分发的素材位于 src/another_arrow_rt265/assets/，
-其中 fonts/LICENSE 为内置字体的 License 全文）。
