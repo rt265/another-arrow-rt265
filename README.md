@@ -6,14 +6,12 @@
 >
 >  本项目仅为学习研究使用，不涉及任何商业用途，也不建议在生产环境中使用。
 
-## Tech Stack
+## Show Time
 
-- Python 3.13
-- Pygame-ce
-- UV
-- Ruff
-- ty
-- Nuitka
+|主界面|游戏界面|成功界面|失败界面|辅助线功能|
+|-|-|-|-|-|
+|![](/docs/player/assets/main.png)| ![](/docs/player/assets/gameplay.png) | ![](/docs/player/assets/win.png) | ![](/docs/player/assets/fail.png) | ![](/docs/player/assets/auxiliary.png) |
+
 
 ## Installation
 
@@ -21,23 +19,22 @@
 
 当前仅提供 Windows x86_64 构建。
 
-## Wiki
-
-## Development
-
-使用 [UV](https://docs.astral.sh/uv/getting-started/installation/) 安装项目：
+## Quick Start
 
 ```bash
+git clone https://github.com/rt265/another-arrow-rt265.git
+cd another-arrow-rt265
 uv sync
-```
-
-启动项目：
-
-```bash
 uv run another-arrow-rt265
 ```
 
-Test:
+你的设备将自动打开游戏窗口。
+
+## Documentation
+
+- 对于玩家：[Player Guide](/docs/player/player-guide.md)
+- 对于开发者：[Development Guide](/docs/dev/development-guide.md)
+- 对于 Agent：[Basic Info for Agent](/docs/agents/basic-info.md)
 
 ```bash
 uv run pytest -q
@@ -63,7 +60,7 @@ ty check
 
 ## Build
 
-使用 [Nuitka](https://nuitka.net/) 打包为独立可执行目录，目标机器无需安装 Python：
+使用 [Nuitka](https://nuitka.net/) 将项目打包为独立可执行目录。
 
 ```bash
 uv run python -m nuitka --project
@@ -84,10 +81,19 @@ build/nuitka/another-arrow-rt265.dist/
 首次打包需要 C 编译器，之后再打包会复用编译缓存。
 调试打包结果时可以用 `SDL_VIDEODRIVER=dummy` 在无显示器环境下跑冒烟测试。
 
+## Tech Stack
+
+- Python 3.13
+- Pygame-ce
+- UV
+- Ruff
+- ty
+- Nuitka
+
 ## Credits & License
 
 本项目遵循 MIT Lincese 协议，详见 [LICENSE](LICENSE) 文件。
 
-本项目可能使用了来自第三方的资源，详见 [THIRD-PARTY](THIRD-PARTY.md) 文件
+本项目使用了来自第三方的资源，详见 [THIRD-PARTY](THIRD-PARTY.md) 文件。
 
 Copyright (c) 2026 rt265
