@@ -286,22 +286,12 @@ def about_page(total_levels: int, max_mistakes: int) -> MenuPage:
         subtitle="ABOUT",
         sections=(
             MenuSection(
-                "玩法与操作",
-                (
-                    "点击箭头，前方没有阻挡时它会飞出棋盘",
-                    "被挡住的箭头飞不出去，还会消耗一次失误",
-                    "鼠标左键点击 · 右下角开关切换辅助线 · R 重开 · H 回主界面",
-                ),
-            ),
-            MenuSection(
                 "制作信息",
                 (
-                    (
-                        f"版本 {config.VERSION} · 共 {total_levels} 关 "
-                        f"· 每关 {max_mistakes} 次失误上限"
-                    ),
-                    "Python 3.13 · pygame-ce · UV · Ruff · ty · Nuitka",
-                    "图标与箭头全部由代码绘制，未使用第三方素材",
+                    f"版本 {config.VERSION}",
+                    "使用 Pygame-ce 制作，和 DeepSeek V4.1 Flash 辅助开发",
+                    "MIT License, Copyright (c) 2026 rt265",
+                    "GitHub Repo: https://github.com/rt265/another-arrow-rt265",
                 ),
             ),
         ),
