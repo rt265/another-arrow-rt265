@@ -38,11 +38,11 @@ PACKAGE_DIRECTORY: Final[Path] = Path(__file__).resolve().parent
 
 
 class FontWeight(StrEnum):
-    """随程序分发的静态字重（Noto Sans CJK SC，SIL OFL 1.1，声明见 ``THIRD-PARTY.md``）。
+    """随程序分发的静态字重。
 
     Noto Sans CJK SC 有可变字重（``-VF.otf``）与七个静态字重两套发行版。这里用
-    **静态字重**：SDL_ttf 只会渲染可变字体的默认实例，选不了轴上的值，界面想要“标题更重、
-    次要文字更轻”的层级就只能各带一个静态文件（可变字体那 29 MB 只换来一个字重）。
+    **静态字重**：SDL_ttf 只会渲染可变字体的默认实例，选不了轴上的值，想要调整字体粗细
+    就只能使用静态字重。
     """
 
     LIGHT = "Light"

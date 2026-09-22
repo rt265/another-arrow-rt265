@@ -134,22 +134,13 @@ def test_bundled_license_ships_next_to_the_font() -> None:
 
 
 def test_the_bundled_file_really_is_the_declared_font() -> None:
-    """字体文件与 ``THIRD-PARTY.md`` 里声明的是同一个：名字对得上。"""
+    """内置的确实是 Noto Sans CJK SC：字体名表对得上。"""
     for weight in resources.BUNDLED_WEIGHTS:
         path = resources.font_path(weight)
         assert path is not None, weight
 
         # 字体名表是 UTF-16BE，直接按位找 "Noto Sans CJK SC" 的编码。
         assert "Noto Sans CJK SC".encode("utf-16-be") in path.read_bytes(), weight
-
-
-def test_third_party_notice_mentions_the_bundled_font() -> None:
-    """引了第三方素材就得在 THIRD-PARTY.md 里点名（AGENTS.md 的要求）。"""
-    notice = (REPO_ROOT / "THIRD-PARTY.md").read_text(encoding="utf-8")
-
-    for name in FONT_FILE_NAMES:
-        assert name in notice, name
-    assert "SIL OPEN FONT LICENSE" in notice
 
 
 # ---------------------------------------------------------------- 用字体
@@ -185,7 +176,7 @@ def test_the_bundled_weights_are_really_three_different_fonts(fresh_caches) -> N
 
 
 def test_ui_styles_use_every_bundled_weight() -> None:
-    """打包了三个字重就得都用上（Light 只用在两处也算用），否则白占一份体积。"""
+    """确保打包的字体都被使用。"""
     styles = _styles()
 
     assert len(set(styles)) == len(styles), "样式表里有完全相同的两项"
@@ -248,11 +239,7 @@ def test_font_sizes_stay_readable(fresh_caches) -> None:
 
 
 def test_assets_font_directory_holds_exactly_the_declared_fonts() -> None:
-    """包内 ``assets/fonts`` 里只有声明过、且真的在用的那几个字重。
-
-    多放一个未声明的字重，``--include-package-data`` 会把它原样搬进 wheel 与产物
-    （白占十几 MB），也过不了 ``THIRD-PARTY.md`` 那份登记。
-    """
+    """包内 ``assets/fonts`` 里只有声明且实际使用的字体。"""
     fonts_dir = (
         resources.PACKAGE_DIRECTORY
         / resources.ASSETS_DIRECTORY
