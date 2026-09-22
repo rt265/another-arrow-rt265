@@ -254,7 +254,7 @@ def start_page(total_levels: int, max_mistakes: int) -> MenuPage:
     （见 :func:`draw_tutorial`），屏幕只留标题、方向箭头装饰与两个按钮。
 
     Args:
-        total_levels: 关卡总数。开始界面不再展示这个数字（“关于”界面上有），
+        total_levels: 关卡总数。开始界面不展示这个数字（关卡进度只在信息栏里出现），
             入参先与 :func:`about_page` 保持同形，以后要加提示行时直接可用。
         max_mistakes: 每关的失误次数上限，同上。
     """
@@ -279,9 +279,12 @@ def start_page(total_levels: int, max_mistakes: int) -> MenuPage:
 def about_page(total_levels: int, max_mistakes: int) -> MenuPage:
     """返回“关于”界面的页面描述。
 
+    这里只放制作信息：玩法说明由第 1 关的交互式教程承担，关卡数与失误上限只在信息栏
+    里出现，因此下面两个入参目前不参与内容，只为与 :func:`start_page` 同形而保留。
+
     Args:
-        total_levels: 关卡总数，与开始界面的提示行同源。
-        max_mistakes: 每关的失误次数上限，同上。
+        total_levels: 关卡总数（仅为入参同形，当前不展示）。
+        max_mistakes: 每关的失误次数上限（同上）。
     """
     return MenuPage(
         title="关于",

@@ -7,7 +7,7 @@ import itertools
 import pygame
 import pytest
 
-from another_arrow_rt265 import config, icons, ui
+from another_arrow_rt265 import config, icons, tutorial, ui
 from another_arrow_rt265.levels import LEVELS, Level
 from another_arrow_rt265.session import GameStatus, Session
 
@@ -209,12 +209,25 @@ def test_start_screen_keeps_no_rule_text() -> None:
     assert layout.hint is None
 
 
-def test_about_screen_still_explains_the_rules() -> None:
-    """文字说明没有消失，只是搬到了“关于”界面，想复习的玩家找得到。"""
-    lines = [line for section in ui.about_page(3, 3).sections for line in section.lines]
+def test_gameplay_help_lives_in_the_tutorial() -> None:
+    """玩法说明不写在菜单页上（首屏与“关于”都没写），而是由第 1 关的教程承担。"""
+    texts = " ".join(tutorial._TEXTS.values())
 
-    assert any("飞出棋盘" in line for line in lines)
-    assert any("失误" in line for line in lines)
+    assert "飞出棋盘" in texts
+    assert "失误" in texts
+
+
+def test_about_screen_only_lists_credits() -> None:
+    """“关于”界面只放制作信息（版本 / 技术栈 / 许可 / 仓库），不重复玩法与操作说明。"""
+    page = ui.about_page(3, 3)
+    lines = [line for section in page.sections for line in section.lines]
+
+    assert [section.caption for section in page.sections] == ["制作信息"]
+    assert any(f"版本 {config.VERSION}" in line for line in lines)
+    assert any("pygame-ce" in line.lower() for line in lines)
+    assert any("MIT License" in line for line in lines)
+    assert any("github.com" in line for line in lines)
+    assert not any("辅助线" in line or "快捷键" in line for line in lines)
 
 
 # ---------------------------------------------------------------- 菜单页
@@ -281,21 +294,14 @@ def test_menu_page_text_fits_inside_its_section() -> None:
 # ---------------------------------------------------------------- 文案
 
 
-def test_menu_pages_report_content_from_the_session() -> None:
-    """“关于”界面上的关卡数与失误上限跟会话走，不写死。"""
+def test_about_page_reports_the_version_but_not_the_session_numbers() -> None:
+    """“关于”界面报版本号（跟着 ``config`` 走），但不再报关卡数与失误上限。"""
     lines = [
         line for section in ui.about_page(12, 5).sections for line in section.lines
     ]
 
     assert any(f"版本 {config.VERSION}" in line for line in lines)
-    assert any("共 12 关" in line and "5 次" in line for line in lines)
-
-
-def test_about_screen_documents_the_guide_switch() -> None:
-    """辅助线是可选功能，因此“关于”界面必须写明开关在哪。"""
-    lines = [line for section in ui.about_page(3, 3).sections for line in section.lines]
-
-    assert any("辅助线" in line and "右下角" in line for line in lines)
+    assert not any("共" in line and "关" in line for line in lines)
 
 
 def test_menu_pages_pick_a_default_action_for_enter() -> None:
