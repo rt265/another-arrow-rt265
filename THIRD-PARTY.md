@@ -20,7 +20,7 @@
 
 ### 音效与音乐
 
-Todo
+音效和音乐均来自 [Pixabay](https://pixabay.com/)，根据 [Content License Summary](https://pixabay.com/service/license-summary/) 的规定，我们可以自由使用这些资源，且不强制署名。
 
 ---
 
@@ -45,4 +45,4 @@ This file registers the open licenses of third-party **assets** distributed with
 
 ### Sound and music
 
-Todo
+The sound and music are from [Pixabay](https://pixabay.com/). In accordance with the [Content License Summary](https://pixabay.com/service/license-summary/), we are free to use these resources without mandatory attribution.
