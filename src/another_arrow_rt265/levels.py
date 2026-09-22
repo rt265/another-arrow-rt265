@@ -53,6 +53,14 @@ LEVEL_SPECS: Final[tuple[LevelSpec, ...]] = (
     LevelSpec(rows=6, cols=6, arrows=16, min_blocked=7, seed=3),
     # 第 6 关：6x6、20 支箭头，开局就有近一半箭头互相当路。
     LevelSpec(rows=6, cols=6, arrows=20, min_blocked=9, seed=4),
+    # 第 7 关：7x7、25 支箭头，棋盘更大，开局被挡的更多。
+    LevelSpec(rows=7, cols=7, arrows=25, min_blocked=12, seed=5),
+    # 第 8 关：8x8、30 支箭头，棋盘更大，开局被挡的更多。
+    LevelSpec(rows=8, cols=8, arrows=30, min_blocked=15, seed=6),
+    # 第 9 关：8x8、40 支箭头，棋盘更大，开局被挡的更多。
+    LevelSpec(rows=8, cols=8, arrows=40, min_blocked=20, seed=7),
+    # 第 10 关：终极关卡！
+    LevelSpec(rows=14, cols=14, arrows=100, min_blocked=40, seed=8),
 )
 """第 2 关起的生成规格：一行一关，想加关卡就再添一行。"""
 
