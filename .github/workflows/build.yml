@@ -1,0 +1,72 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: "Setup Python"
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@9
+
+      - name: Install project
+        run: uv sync --locked --all-extras --dev
+
+      - name: Build for Windows
+        run: uv run python -m nuitka -project
+
+      - name: Pack
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path .\build\nuitka\another-arrow-rt265.dist\* -DestinationPath .\another-arrow-windows-x64.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: "Setup Python"
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@9
+
+      - name: Install project
+        run: uv sync --locked --all-extras --dev
+
+      - name: Build for Linux
+        run: uv run python -m nuitka -project
+
+      - name: Pack
+        run: zip -r ./another-arrow-linux-x64.zip ./build/nuitka/another-arrow-rt265.dist/*
+
+  release:
+    

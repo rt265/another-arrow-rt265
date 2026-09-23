@@ -1,0 +1,38 @@
+name: Testing
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: action/checkout@v7
+
+      - name: "Setup Python"
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@9
+
+      - name: Install project
+        run: uv sync --locked --all-extras --dev
+
+      - name: Run tests
+        run: uv run pytest -q
+
+      - name: Run linter
+        run: uv run ruff check .
+
+      - name: Run formatter
+        run: uv run ruff format --check .
+
+      - name: Run type checker
+        run: uv run ty check
