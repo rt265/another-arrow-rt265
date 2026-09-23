@@ -61,6 +61,17 @@ build/nuitka/another-arrow-rt265.dist/
 
 发布：注意 `config.VERSION` 与 `pyproject.toml` 的 `version` 必须一致（`tests/test_config.py` 钉住）。
 
+### CI/CD
+
+| 工作流 | 触发 | 干什么 |
+|--|--|--|
+| `.github/workflows/test.yml` | 推送任意分支、PR、手动 | 跑 `pytest` / `ruff check` / `ruff format --check` / `ty check` 四条命令 |
+| `.github/workflows/build.yml` | 推送 `main`、推送 `v*` 标签、手动 | 在 Windows 与 Linux 上各打一次包，压成 zip 上传为 Actions 产物；打上 tag `v*` 标签时发布到 GitHub Release |
+
+- CI 用的就是 `uv run python -m nuitka --project` 这一条命令，包名 / 入口 / 打包策略仍只在 `pyproject.toml` 里写一次
+- 发布附件名统一为 `another-arrow-<version tag>-<os>-<arch>.zip`（目前是 `-windows-x64` 与 `-linux-x64`；非标签构建把版本位换成短提交号），所以打标签前先确认 `config.VERSION` 与 `pyproject.toml` 的 `version` 一致、且标签名与版本号同形
+- 打包后会做一次**冒烟**：产物要能在无显示器环境（SDL dummy 驱动）下启动并存活 8 秒，提前退出即判失败 —— 这能挡住“缺 DLL / 素材没进产物 / 入口写错”这类单元测试覆盖不到的问题
+
 ## 项目结构
 
 ```text

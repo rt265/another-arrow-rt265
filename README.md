@@ -18,7 +18,12 @@
 
 ## Installation
 
-下载 [Releases](https://github.com/rt265/another-arrow-rt265/releases) 中的 `another-arrow-<version tag>.zip`，解压并运行 `another-arrow-rt265.exe`。当前仅提供 Windows x86_64 构建。
+从 [Releases](https://github.com/rt265/another-arrow-rt265/releases) 下载构建产物 `another-arrow-<tag>-<os>-<arch>.zip`：
+
+- Windows 选择 `-windows-x64`，
+- Linux 选择 `-linux-x64`。
+
+解压后运行目录下的可执行文件（Linux 首次运行前可能需要 `chmod +x`）。
 
 或者从源码运行/打包。参见 [Development Guide](/docs/dev/development-guide.md)。
 

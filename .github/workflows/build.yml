@@ -1,3 +1,10 @@
+# 打包与发布。
+#
+#   push 到 main / 手动触发 → 两个平台各产出一份 zip，作为 Actions 产物（Artifact）供下载；
+#   push v* 标签            → 额外把两份 zip 传到 GitHub Release。
+#
+# 打包命令与本地一模一样：`uv run python -m nuitka --project`。
+# 包名、入口、产物名与 [tool.nuitka] 里的打包策略都写在 pyproject.toml，这里不再重复声明。
 name: Build and Release
 
 on:
@@ -8,65 +15,172 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# 同一分支（或标签）来了新提交，取消还在跑的旧构建。
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.13'
+  # 下面两个名字都是 --project 从 pyproject.toml 推出来的，两个平台完全一样。
+  APP_NAME: another-arrow-rt265
+  DIST_DIR: build/nuitka/another-arrow-rt265.dist
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    timeout-minutes: 15
+  build:
+    name: Build ${{ matrix.os_name }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # os_name / arch 既用于 job 名，也用于附件名：another-arrow-<version tag>-<os>-<arch>.zip
+        include:
+          - os: windows-latest
+            os_name: windows
+            arch: x64
+          - os: ubuntu-latest
+            os_name: linux
+            arch: x64
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: main
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
 
-      - name: "Setup Python"
-        uses: actions/setup-python@v7
+      - name: Setup Python
+        uses: actions/setup-python@v7.0.0
         with:
-          python-version: '3.13'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install UV
-        uses: astral-sh/setup-uv@9
+        uses: astral-sh/setup-uv@v10.2.0
 
+      # uv-build 在 dev 依赖组里，--project 读 pyproject 时会 import 它，不能省。
       - name: Install project
         run: uv sync --locked --all-extras --dev
 
-      - name: Build for Windows
-        run: uv run python -m nuitka -project
+      # patchelf 给 Linux 的 standalone 产物改写 rpath 用（Nuitka 也能自己下载，
+      # 预装好可以少一次网络交互）；zip 用于打包。
+      - name: Install build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y patchelf zip
 
-      - name: Pack
+      # Nuitka 的编译缓存放在 NUITKA_CACHE_DIR 下（见 nuitka/utils/AppDirs.py）。
+      # 跨运行复用能省掉重复的 C 编译；缓存键绑死 uv.lock，依赖一变就换新键。
+      - name: Restore Nuitka cache
+        uses: actions/cache@v5.0.5
+        with:
+          path: ${{ github.workspace }}/.nuitka-cache
+          key: nuitka-${{ runner.os }}-${{ runner.arch }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            nuitka-${{ runner.os }}-${{ runner.arch }}-py${{ env.PYTHON_VERSION }}-
+
+      - name: Build with Nuitka
+        env:
+          NUITKA_CACHE_DIR: ${{ github.workspace }}/.nuitka-cache
+        run: uv run python -m nuitka --project
+
+      # 附件名统一为 another-arrow-<version tag>-<os>-<arch>.zip（README 的下载说明就是这么写的）：
+      # 打标签时版本位用标签名，平时用短提交号，一眼能看出这份 zip 是哪次构建的。
+      - name: Resolve asset name
+        id: asset
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            slug="$GITHUB_REF_NAME"
+          else
+            slug="${GITHUB_SHA::7}"
+          fi
+          echo "file=another-arrow-$slug-${{ matrix.os_name }}-${{ matrix.arch }}.zip" >> "$GITHUB_OUTPUT"
+
+      # 冒烟：产物必须能自己起来并活过 8 秒。缺 DLL、素材没进产物、入口写错
+      # 这类问题只会在这里暴露，单元测试覆盖不到。SDL 走 dummy 驱动，CI 没有显示器与声卡。
+      - name: Smoke test the frozen build (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path .\build\nuitka\another-arrow-rt265.dist\* -DestinationPath .\another-arrow-windows-x64.zip
+        run: |
+          $exe = Join-Path $env:DIST_DIR "$env:APP_NAME.exe"
+          if (-not (Test-Path $exe)) { throw "打包产物不存在：$exe" }
+          $env:SDL_VIDEODRIVER = 'dummy'
+          $env:SDL_AUDIODRIVER = 'dummy'
+          $process = Start-Process -FilePath $exe -PassThru
+          if ($process.WaitForExit(8000)) {
+            throw "打包产物启动后立即退出（退出码 $($process.ExitCode)）"
+          }
+          $process.Kill()
+          Write-Host "OK：$env:APP_NAME.exe 存活 8 秒未崩溃"
 
-  build-linux:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
+      - name: Smoke test the frozen build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          exe="$DIST_DIR/$APP_NAME"
+          if [ ! -x "$exe" ]; then
+            echo "打包产物不存在或不可执行：$exe"
+            ls -l "$DIST_DIR"
+            exit 1
+          fi
+          set +e
+          SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy timeout 8 "$exe"
+          code=$?
+          set -e
+          if [ "$code" -ne 124 ]; then
+            echo "打包产物没有稳定运行（timeout 期望 124，实际 $code）"
+            exit 1
+          fi
+          echo "OK：$APP_NAME 存活 8 秒未崩溃"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "$env:DIST_DIR\*" -DestinationPath "${{ steps.asset.outputs.file }}"
+
+      # 在产物目录里压缩，zip 里就不会多一层 build/nuitka/... 的路径；
+      # 用 `.` 而不是 `*` 是为了带上 Linux 产物里的隐藏目录 .libs。
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          (cd "$DIST_DIR" && zip -q -r "$GITHUB_WORKSPACE/${{ steps.asset.outputs.file }}" .)
+          unzip -l "${{ steps.asset.outputs.file }}" | tail -n 2
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7.0.1
         with:
-          ref: main
-
-      - name: "Setup Python"
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-
-      - name: Install UV
-        uses: astral-sh/setup-uv@9
-
-      - name: Install project
-        run: uv sync --locked --all-extras --dev
-
-      - name: Build for Linux
-        run: uv run python -m nuitka -project
-
-      - name: Pack
-        run: zip -r ./another-arrow-linux-x64.zip ./build/nuitka/another-arrow-rt265.dist/*
+          name: ${{ matrix.os_name }}-${{ matrix.arch }}
+          path: ${{ steps.asset.outputs.file }}
+          if-no-files-found: error
+          retention-days: 14
 
   release:
-    
+    name: Publish release
+    # 只有 v* 标签才发布；main 上的构建只留 Actions 产物。
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write   # gh release 需要写权限
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            # 重跑时该标签的发布已存在：换掉附件，而不是整体失败。
+            gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.zip \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag
+          fi

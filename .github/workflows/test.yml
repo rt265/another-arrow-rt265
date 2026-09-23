@@ -1,30 +1,46 @@
-name: Testing
+# 测试与静态检查：每次推送、每个 PR 都跑一遍，保证进 main 的提交是绿的。
+# 四条命令与 docs/dev/development-guide.md 里本地跑的完全一致。
+name: Tests
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
+
+# 同一分支（或 PR）来了新提交，取消还在排队的旧运行。
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  PYTHON_VERSION: '3.13'
+
 jobs:
   test:
+    name: pytest / ruff / ty
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - uses: action/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
 
-      - name: "Setup Python"
-        uses: actions/setup-python@v7
+      - name: Setup Python
+        uses: actions/setup-python@v7.0.0
         with:
-          python-version: '3.13'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install UV
-        uses: astral-sh/setup-uv@9
+        uses: astral-sh/setup-uv@v10.2.0
 
+      # --locked：CI 用的必须是 uv.lock 钉住的版本；锁文件过期时直接失败，
+      # 而不是悄悄装一套新的依赖。
       - name: Install project
         run: uv sync --locked --all-extras --dev
 
+      # tests/conftest.py 已把 SDL 切到 dummy 驱动，没有显示器也能跑。
       - name: Run tests
         run: uv run pytest -q
 

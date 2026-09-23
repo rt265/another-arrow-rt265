@@ -92,3 +92,17 @@
 17. （已实现：新增“设置”菜单页（`Scene.SETTINGS`），两个滑动开关分别控制背景音乐与音效；入口是开始界面页脚的“设置”按钮与游戏中的 `S` 键，页脚“返回”回到打开它的那个画面——中途进设置不丢关卡进度也不计时；静音拦在 `Audio` 的播放层（`music_enabled` / `sound_enabled`），开关不落盘、关闭程序后恢复默认，见 `change-log-22-audio-settings.md`）设置：允许开关音乐和音效
 
 **以上 17 条已全部实现**；`README.md` / `THIRD-PARTY.md` 等面向用户的文档不随本轮改动。
+
+## CI 与发布（2026-09-23，`change-log-26-github-actions.md`）
+
+`.github/workflows/` 的两个工作流已重写完毕，细节见变更记录 26，这里只留结论：
+
+- `test.yml`：推送任意分支 / PR / 手动 → `pytest` + `ruff check` + `ruff format --check` + `ty check`；
+- `build.yml`：推送 `main` / `v*` 标签 / 手动 → Windows 与 Linux 各打一次包（`uv run python -m nuitka --project`，
+  与本地同一条命令），打标签时用 `gh release create` 发到 Release；
+- 附件名统一为 `another-arrow-<version tag>-<os>-<arch>.zip`（`-windows-x64` / `-linux-x64`），
+  非标签构建把版本位换成短提交号；打完包会在 SDL dummy 驱动下冒烟 8 秒，提前退出即失败；
+- **不要改用 `Nuitka/Nuitka-Action`**：它的必填输入 `script-name` 会以 `--script-name` 传给 Nuitka，
+  而 Nuitka 明确拒绝 `--project` 与 `--main` / `--script-name` 同时出现（本机 Nuitka 4.2.1 实测报
+  `FATAL: Error, with '--project' do not provide '--main', ...`），用它就得把 `pyproject.toml` 里的
+  打包声明全部搬到 workflow 里；此外它还 pip 从 git 装 Nuitka，不读 `uv.lock`。详见变更记录 26。
