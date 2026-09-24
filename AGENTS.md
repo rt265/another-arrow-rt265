@@ -13,6 +13,7 @@
 │  └─another_arrow_rt265 # 源代码
 │     └─assets # 静态资源
 ├─tests # 测试
+├─tools # 开发脚本（字体子集化等，不随程序分发）
 └─pyproject.toml 项目信息与依赖
 ```
 

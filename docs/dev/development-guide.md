@@ -12,7 +12,7 @@
 | [uv](https://docs.astral.sh/uv/) | 最新 | 依赖与虚拟环境的唯一入口 |
 | C 编译器 | — | 只有打包（Nuitka）需要，从源码运行不需要 |
 
-`pygame-ce` 是唯一的运行时依赖；`ruff` 与 `ty` 也放在 `[project.dependencies]` 里，所以 `uv run ruff` / `uv run ty` 开箱可用。`pytest`、`nuitka`、`uv-build` 属于 `dev` 依赖组，`uv sync` 会一并安装。
+`pygame-ce` 是唯一的运行时依赖；`ruff` 与 `ty` 也放在 `[project.dependencies]` 里，所以 `uv run ruff` / `uv run ty` 开箱可用。`pytest`、`nuitka`、`uv-build` 与 `fonttools`（字体子集化，见 `tools/`）属于 `dev` 依赖组，`uv sync` 会一并安装。
 
 ## 快速开始
 
@@ -85,6 +85,7 @@ build/nuitka/another-arrow-rt265.dist/
 │     ├─assets  # 随程序分发的素材（字体、音频），必须待在包内
 │     └─*.py   # 各个模块
 ├─tests        # pytest 测试，与源码模块基本一一对应
+├─tools        # 开发脚本（字体子集化），不随程序分发
 └─pyproject.toml # 项目情况
 ```
 
@@ -154,7 +155,8 @@ graph LR
 素材放在**包内** `src/another_arrow_rt265/assets/`，用 `resources.font_path()` /
 `sound_path()` 定位，绝不写相对路径。
 
-- 字体：`assets/fonts/NotoSansCJKsc-{Light,Regular,Bold}.otf`，三个**静态字重**。不要引入可变字体（`-VF.otf`）：SDL_ttf 不认 `wght` 轴，只会画默认实例；
+- 字体：`assets/fonts/SHSSubsetSC-{Regular,Bold}.otf`，两个**静态字重**，界面层级由字号 + 字重两级表达。不要引入可变字体（`-VF.otf`）：SDL_ttf 不认 `wght` 轴，只会画默认实例。文件名前缀 = 族名去掉空格 = PostScript 名前缀（`resources.FONT_STEM` / `FONT_FAMILY`）——OFL 1.1 下修改版不沿用上游族名 `Noto Sans CJK SC`；
+- 字体是**子集化并改过名**的：只保留游戏会画出来的两百多个字（完整字重每个约 16 MB，子集后 80 KB），族名 / 子族名 / 全名 / PostScript 名写成自己的，上游的版权与 OFL 声明原样保留。改界面文案后必须重新跑 `uv run python tools/subset_fonts.py`，否则 `tests/test_font_subset.py` 会报出缺字；
 - 音频：`assets/sounds/<Cue 名>.mp3`，枚举值与文件主名一致；
 - **不要**在 `[tool.nuitka]` 里写 `include-data-dir` / `include-data-files`：`--project` 已经用 `--include-package-data` 搬运包内文件，额外声明会被判为“多余的数据文件”而打包失败。
 
@@ -173,6 +175,20 @@ graph LR
 ### 加一个界面
 
 三步：在 `ui.py` 写一个 `MenuPage` → 在 `game.py` 的 `Scene` 加成员并补`_menu_page()` / `_draw()` 各一行 → 在 `Game._run_action()` 的动作表补一行。`MenuButton` 只声明动作名，这张表就是界面与逻辑之间唯一的接口（未注册的动作直接 `KeyError`）。
+
+### 加一句界面文案
+
+`ui.py` / `tutorial.py` 等模块里的字符串字面量就是界面会画的字，直接改即可；但若引入了新字
+（新汉字、新符号），必须重新生成自带字体：
+
+```bash
+uv run python tools/subset_fonts.py
+```
+
+自带字体是**子集化 + 改名**的（口径见 `tools/subset_fonts.py` 的模块说明：它把源码字面量
+导成 `build/game-text.txt`，用 fontTools 把完整字重切到这批字上，再把族名换成
+`SHSSubset SC`）。漏了这一步，新字在界面里是空白方块（`pygame` 不报错），
+所以 `tests/test_font_subset.py` 会把这条约束先拦下来。
 
 ### 加一个音效
 
@@ -204,7 +220,7 @@ graph LR
 | `.preview/print_levels.py` | 打印生成关卡的网格、挡住统计与求解顺序 |
 | `.preview/window_sizes.py` | 各窗口尺寸下的界面截图（检查缩放与留白） |
 | `.preview/frame_time.py` | 稳态每帧耗时（改渲染后对比性能） |
-| `.preview/font_check.py` | 并排渲染三个内置字重，肉眼确认字重生效 |
+| `.preview/font_check.py` | 并排渲染两个内置字重，肉眼确认字重生效、没有缺字 |
 | `.preview/probe_resources.py` | standalone 探针，验证打包产物里的资源定位是真的 |
 
 `.preview/` 已在 `.gitignore` 里，临时脚本随手放这里即可。

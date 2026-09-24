@@ -85,13 +85,31 @@
 10. （已实现）UI 优化：添加“关于界面”，预留后续其他界面的接口
 11. （已实现）添加辅助线功能，显示箭头前进方向
 12. （已实现：可自由拖拽/最大化，等比放大且居中留白）UI/UX 修复：无法自由更改窗口大小
-13. （已实现）UI 优化：改善游戏内素材的低分辨率问题，优化图标、字体等素材的显示效果（字体：随程序分发三个静态字重；抗锯齿：`sprites.py` 的超采样贴图，圆片 / 图标 / 圆角面板都有了过渡色；图标仍是代码绘制的矢量图形）
+13. （已实现）UI 优化：改善游戏内素材的低分辨率问题，优化图标、字体等素材的显示效果（字体：随程序分发静态字重，现为 Regular / Bold 两个，且已子集化，见事项 18；抗锯齿：`sprites.py` 的超采样贴图，圆片 / 图标 / 圆角面板都有了过渡色；图标仍是代码绘制的矢量图形）
 14. （已实现：圆片半径 = 格子内边宽 × 0.40，箭头图形再收到圆片半径的 0.88，箭头与格子边界之间留出内边宽 10% 的间隔）UI 优化：调整箭头大小，与边界保持一定间隔
 15. （已实现：删掉渐变 / 投影 / 光晕，背景与组件全部改成纯色 + 1px 描边，圆角统一为 12；信息栏由四块卡片合并为一条通栏，见 `change-log-19-ui-flattening.md`）UI/UX 整体优化：重构 UI 设计，扁平、简洁为上。
 16. （已实现：背景音乐从窗口打开循环到退出（`start_music()` 幂等，不随画面重播）；按钮 / 快捷键 / 箭头飞出 / 撞墙 / 通关 / 失败各配一声音效，点空与结算界面的无效点击不响；素材在包内 `assets/sounds/`，没有声卡或缺素材时静默降级，音乐 0.35 / 音效 0.7 两条音量，见 `change-log-21-music-and-sound.md`）引入音乐和音效
 17. （已实现：新增“设置”菜单页（`Scene.SETTINGS`），两个滑动开关分别控制背景音乐与音效；入口是开始界面页脚的“设置”按钮与游戏中的 `S` 键，页脚“返回”回到打开它的那个画面——中途进设置不丢关卡进度也不计时；静音拦在 `Audio` 的播放层（`music_enabled` / `sound_enabled`），开关不落盘、关闭程序后恢复默认，见 `change-log-22-audio-settings.md`）设置：允许开关音乐和音效
+18. （已实现：字重从三个减到两个（Regular / Bold），副标题与页脚提示改用 Regular + 暗色（`COLOR_TEXT_MUTED`），不再靠字重变细；两个字重都用 fontTools **子集化**到游戏会画的 254 个字（每个 16 MB → 80 KB），并按 OFL 1.1 把修改版**改名为 `SHSSubset SC`**（版权与许可声明原样保留），完整性由 `tests/test_font_subset.py` 钉住，见 `change-log-27-font-subset.md` 与 `change-log-28-font-rename.md`）打包体积优化：去除 Light 字重，仅作 Regular-Bold 两级变化；导出游戏文本，做字体子集化
 
-**以上 17 条已全部实现**；`README.md` / `THIRD-PARTY.md` 等面向用户的文档不随本轮改动。
+## 字体与打包体积（2026-09-24，`change-log-27-font-subset.md` / `change-log-28-font-rename.md`）
+
+自带字体曾是体积大头，现在只有两个字重、而且已经子集化并改过名：
+
+- **两个字重**：`assets/fonts/SHSSubsetSC-{Regular,Bold}.otf`（`resources.BUNDLED_WEIGHTS`，
+  Light 已删掉）。界面层级只剩“字号 + Bold 一级强调”，次要文字靠更小的字号与 `COLOR_TEXT_MUTED` 退到背景里；
+- **子集化**：只保留游戏会画出来的 254 个字（含整段 ASCII 可打印字符），两个文件共 160 KB；
+  未子集化的完整静态字重每人约 16 MB。字形轮廓与度量原样保留（Regular 同一行 690px、Bold 701px，与子集化前一致）；
+- **改名**：修改版不沿用上游名（OFL 1.1），字体内部族名是 `resources.FONT_FAMILY`（`SHSSubset SC`），
+  PostScript 名与**文件名**都是 `SHSSubsetSC-{Regular,Bold}`（`resources.FONT_STEM`），
+  唯一标识里写着 “subset of Noto Sans CJK SC”；版权（Adobe）与 OFL 许可声明原样保留；
+- **生成方式**：`uv run python tools/subset_fonts.py`——用 `ast` 扫 `src/another_arrow_rt265/*.py`
+  的字符串字面量（跳过模块 / 类 / 函数 / **属性**文档字符串）导出 `build/game-text.txt`，
+  按 `resources.BUNDLED_WEIGHTS` 逐个切字，再把族名 / 子族名 / 全名 / PostScript 名换成自己的。
+  完整字重不进仓库，放在 `build/fonts-full/`（下载地址见脚本 docstring）；
+- **改了界面文案、引入新字，必须重跑这条命令**：漏了这一步新字在界面里是空白方块（`pygame` 不报错），
+  `tests/test_font_subset.py` 会读字体 cmap 逐字核对并失败，另有测试钉住名字表（族名是自己的、
+  上游声明还在）与“内置字体确实被切过”（≤ 500 KB）。
 
 ## CI 与发布（2026-09-23，`change-log-26-github-actions.md`）
 

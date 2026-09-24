@@ -92,16 +92,17 @@ class _TextStyle:
 
 
 # 界面文字的字号与字重一览。共用同一套字重的文字写在同一行，读的时候按“角色”找：
-# Bold 负责“标题 / 数值 / 按钮 / 卡片小标题”，Regular 负责“正文与标签”，
-# Light 只用在**弱化的次要文字**上（英文副标题、页脚提示）——它们本来就该退到背景里。
+# Bold 负责“标题 / 数值 / 按钮 / 卡片小标题”，Regular 负责“正文 / 标签 / 次要说明”。
+# 字重只有两级，所以“次要”不再靠字重变细表达，而是靠**字号更小 + 颜色更暗**
+# （副标题与页脚提示都用 COLOR_TEXT_MUTED），层级依旧分得开。
 _TEXT_HERO: Final[_TextStyle] = _TextStyle(68, resources.FontWeight.BOLD)
-_TEXT_SUBTITLE: Final[_TextStyle] = _TextStyle(20, resources.FontWeight.LIGHT)
+_TEXT_SUBTITLE: Final[_TextStyle] = _TextStyle(20)
 _TEXT_TITLE: Final[_TextStyle] = _TextStyle(36, resources.FontWeight.BOLD)
 _TEXT_BODY: Final[_TextStyle] = _TextStyle(20)
 _TEXT_BUTTON: Final[_TextStyle] = _TextStyle(20, resources.FontWeight.BOLD)
 _TEXT_SECTION_TITLE: Final[_TextStyle] = _TextStyle(19, resources.FontWeight.BOLD)
 _TEXT_RULE: Final[_TextStyle] = _TextStyle(17)
-_TEXT_HINT: Final[_TextStyle] = _TextStyle(16, resources.FontWeight.LIGHT)
+_TEXT_HINT: Final[_TextStyle] = _TextStyle(16)
 _TEXT_LABEL: Final[_TextStyle] = _TextStyle(15)
 _TEXT_PROGRESS: Final[_TextStyle] = _TextStyle(15, resources.FontWeight.BOLD)
 _TEXT_VALUE: Final[_TextStyle] = _TextStyle(24, resources.FontWeight.BOLD)
@@ -414,7 +415,7 @@ def _font(
 ) -> pygame.font.Font:
     """按“字号 + 字重”取字体（带缓存）。
 
-    优先使用随程序分发的静态字重（``assets/fonts/NotoSansCJKsc-<字重>.otf``，见
+    优先使用随程序分发的静态字重（``assets/fonts/SHSSubsetSC-<字重>.otf``，见
     :func:`resources.font_path`）；这个字重的文件缺失时先退回常规字重，再退回系统
     的中文字体；再没有就退回 pygame 内置字体，此时中文会显示为占位方块，但界面结构依旧完整。
 

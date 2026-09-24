@@ -1,11 +1,12 @@
 """定位随程序分发的静态资源（``assets/``）。
 
-程序**自带**全部素材：一套字体（Noto Sans CJK SC 的三个**静态字重**：Light / Regular /
-Bold）与一套音频（背景音乐 + 五个音效）。字体不碰运气去匹配系统字体，音频不依赖
-用户机器上装了什么。素材放在**包内**（``src/another_arrow_rt265/assets/``）：
-打包工具会把包内文件原样搬走，而本文件就在它们旁边，所以 :data:`PACKAGE_DIRECTORY`
-永远是第一个候选——源码运行、``uv build`` 出的 wheel、Nuitka 打出的 exe 三种形态下
-位置相同（已用探针在产物里核实过）。
+程序**自带**全部素材：一套字体（Noto Sans CJK SC 的两个**静态字重**：Regular / Bold，
+已**子集化**并**改名**为 :data:`FONT_FAMILY`——只保留游戏真正会画出来的字，
+见 ``tools/subset_fonts.py``）与一套音频（背景音乐 + 五个音效）。字体不碰运气
+去匹配系统字体，音频不依赖用户机器上装了什么。
+素材放在**包内**（``src/another_arrow_rt265/assets/``）：打包工具会把包内文件原样搬走，
+而本文件就在它们旁边，所以 :data:`PACKAGE_DIRECTORY` 永远是第一个候选——源码运行、
+``uv build`` 出的 wheel、Nuitka 打出的 exe 三种形态下位置相同（已用探针在产物里核实过）。
 
 其余候选只是为了能兜住手工部署：
 
@@ -30,9 +31,16 @@ from typing import Final
 #: 资源根目录名（与包内结构 ``assets/`` 保持一致）。
 ASSETS_DIRECTORY: Final[str] = "assets"
 
-#: 字体所在子目录与文件名前缀：``assets/fonts/NotoSansCJKsc-<字重>.otf``。
+#: 字体所在子目录与文件名前缀：``assets/fonts/SHSSubsetSC-<字重>.otf``。
+#: 前缀 = 族名去掉空格（:data:`FONT_FAMILY`），与 PostScript 名的前缀一致。
 FONT_DIRECTORY: Final[str] = "fonts"
-FONT_STEM: Final[str] = "NotoSansCJKsc"
+FONT_STEM: Final[str] = "SHSSubsetSC"
+
+#: 自带字体的族名（family name）。
+#: 子集化与改名都在 ``tools/subset_fonts.py`` 里完成：OFL 1.1 下修改版不沿用上游族名
+#: （``Noto Sans CJK SC``），所以游戏运行时用到的字体叫这个名字（全名 ``SHSSubset SC Bold``，
+#: PostScript 名与文件名见 :func:`font_postscript_name` / :func:`font_file_name`）。
+FONT_FAMILY: Final[str] = "SHSSubset SC"
 
 #: 音频所在子目录与后缀：``assets/sounds/<名称>.mp3``（名称含义见 ``audio.Cue``）。
 SOUND_DIRECTORY: Final[str] = "sounds"
@@ -48,16 +56,17 @@ class FontWeight(StrEnum):
     Noto Sans CJK SC 有可变字重（``-VF.otf``）与七个静态字重两套发行版。这里用
     **静态字重**：SDL_ttf 只会渲染可变字体的默认实例，选不了轴上的值，想要调整字体粗细
     就只能使用静态字重。
+
+    只发两个：界面的层级由**字号**与**字重**两层表达，两级（Regular 正文 / Bold 强调）
+    就够用；多一个 Light 就要多背一份子集化后的字体，而它换来的差别肉眼几乎看不出。
     """
 
-    LIGHT = "Light"
     REGULAR = "Regular"
     BOLD = "Bold"
 
 
 #: 随程序打包的字重（按由轻到重排列，也就是界面上的层级顺序）。
 BUNDLED_WEIGHTS: Final[tuple[FontWeight, ...]] = (
-    FontWeight.LIGHT,
     FontWeight.REGULAR,
     FontWeight.BOLD,
 )
@@ -101,8 +110,17 @@ def asset_path(*parts: str) -> Path | None:
 
 
 def font_file_name(weight: FontWeight = DEFAULT_WEIGHT) -> str:
-    """返回某个字重的字体文件名（例如 ``NotoSansCJKsc-Light.otf``）。"""
+    """返回某个字重的字体文件名（例如 ``SHSSubsetSC-Bold.otf``）。
+
+    文件名与字体内部的名称同源（都是“我们自己的名字”，不再沿用上游族名），
+    出处靠字体名字表里的版权 / 许可声明与 ``THIRD-PARTY.md`` 记。
+    """
     return f"{FONT_STEM}-{weight.value}.otf"
+
+
+def font_postscript_name(weight: FontWeight = DEFAULT_WEIGHT) -> str:
+    """返回某个字重的 PostScript 名（例如 ``SHSSubsetSC-Bold``）。"""
+    return f"{FONT_STEM}-{weight.value}"
 
 
 def font_parts(weight: FontWeight = DEFAULT_WEIGHT) -> tuple[str, ...]:

@@ -1,7 +1,9 @@
-"""自带素材（三个静态字重字体）的定位与使用测试。
+"""自带素材（两个静态字重字体 + 一套音频）的定位与使用测试。
 
 界面文字不依赖系统字体是这一部分的核心承诺，因此这里既测“文件找得到”，
 也测“``ui`` 真的用了它、而且真的用上了不同字重”，还测“找不到时不会崩”。
+字体是**子集化并改过名**的（见 ``tools/subset_fonts.py``），字体文件内容层面的检查
+（字形覆盖、名字表、版权声明）在 ``tests/test_font_subset.py``。
 """
 
 from __future__ import annotations
@@ -68,21 +70,29 @@ def test_bundled_font_is_found(weight: resources.FontWeight) -> None:
 
 
 def test_font_file_names_follow_the_weight() -> None:
-    """文件名写法只有一处定义：``NotoSansCJKsc-<字重>.otf``。"""
+    """文件名写法只有一处定义：``SHSSubsetSC-<字重>.otf``。"""
     assert FONT_FILE_NAMES == (
-        "NotoSansCJKsc-Light.otf",
-        "NotoSansCJKsc-Regular.otf",
-        "NotoSansCJKsc-Bold.otf",
+        "SHSSubsetSC-Regular.otf",
+        "SHSSubsetSC-Bold.otf",
     )
     assert resources.font_parts(resources.FontWeight.BOLD) == (
         "fonts",
-        "NotoSansCJKsc-Bold.otf",
+        "SHSSubsetSC-Bold.otf",
     )
+
+
+def test_only_two_weights_ship() -> None:
+    """界面的字重层级只有两级（Regular / Bold），不再随程序分发 Light。"""
+    assert resources.BUNDLED_WEIGHTS == (
+        resources.FontWeight.REGULAR,
+        resources.FontWeight.BOLD,
+    )
+    assert "LIGHT" not in resources.FontWeight.__members__
 
 
 def test_missing_a_weight_is_a_regular_font_not_a_crash() -> None:
     """字重是逐个文件定位的，拿不到时返回 ``None`` 而不是报错（由 ``ui`` 降级）。"""
-    assert resources.font_path(resources.FontWeight.LIGHT) is not None
+    assert resources.font_path(resources.FontWeight.BOLD) is not None
     assert resources.DEFAULT_WEIGHT == resources.FontWeight.REGULAR
     assert resources.font_path() == resources.font_path(resources.DEFAULT_WEIGHT)
 
@@ -136,14 +146,21 @@ def test_bundled_license_ships_next_to_the_font() -> None:
     assert "SIL OPEN FONT LICENSE" in text
 
 
-def test_the_bundled_file_really_is_the_declared_font() -> None:
-    """内置的确实是 Noto Sans CJK SC：字体名表对得上。"""
-    for weight in resources.BUNDLED_WEIGHTS:
-        path = resources.font_path(weight)
-        assert path is not None, weight
+def test_the_bundled_font_names_are_ours_not_the_upstream_ones() -> None:
+    """OFL 1.1 下修改版不沿用上游名：文件名与字体内部名称都是我们自己的。
 
-        # 字体名表是 UTF-16BE，直接按位找 "Noto Sans CJK SC" 的编码。
-        assert "Noto Sans CJK SC".encode("utf-16-be") in path.read_bytes(), weight
+    两者的写法只有一种约定：**文件名前缀 = 族名去掉空格 = PostScript 名的前缀**
+    （名字表实际写了什么，由 ``test_font_subset.py`` 核对）。出处靠字体里的版权 /
+    许可声明与 ``THIRD-PARTY.md`` 记，不再靠文件名。
+    """
+    assert resources.FONT_FAMILY == "SHSSubset SC"
+    assert resources.FONT_STEM == "SHSSubsetSC"
+    assert resources.FONT_STEM == resources.FONT_FAMILY.replace(" ", "")
+    assert "Noto" not in resources.FONT_STEM
+    assert resources.font_file_name(resources.FontWeight.BOLD) == "SHSSubsetSC-Bold.otf"
+    assert (
+        resources.font_postscript_name(resources.FontWeight.BOLD) == "SHSSubsetSC-Bold"
+    )
 
 
 # ---------------------------------------------------------------- 用字体
@@ -166,8 +183,8 @@ def test_ui_draws_with_the_bundled_font(
     )
 
 
-def test_the_bundled_weights_are_really_three_different_fonts(fresh_caches) -> None:
-    """三个文件必须是三种字形：同一行字用三个字重渲染，结果不能一模一样。"""
+def test_the_bundled_weights_are_really_two_different_fonts(fresh_caches) -> None:
+    """两个文件必须是两种字形：同一行字用两个字重渲染，结果不能一模一样。"""
     rendered = {
         weight: _pixels(
             ui._font(24, weight).render("一箭又一箭", True, (255, 255, 255))
@@ -179,10 +196,14 @@ def test_the_bundled_weights_are_really_three_different_fonts(fresh_caches) -> N
 
 
 def test_ui_styles_use_every_bundled_weight() -> None:
-    """确保打包的字体都被使用。"""
+    """确保打包的字体都被使用。
+
+    样式是**角色**（标题 / 副标题 / 正文 / 标签…），不是字重表：去掉 Light 之后，
+    副标题与正文恰好都是 20 号常规字重，两个常量因此可以一样，不再要求互不相同。
+    """
     styles = _styles()
 
-    assert len(set(styles)) == len(styles), "样式表里有完全相同的两项"
+    assert styles, "样式表里一个样式都没有"
     assert {style.weight for style in styles} == set(resources.BUNDLED_WEIGHTS)
 
 
@@ -216,15 +237,15 @@ def test_a_missing_weight_falls_back_to_the_regular_one(
         resources,
         "font_path",
         lambda weight=resources.DEFAULT_WEIGHT: (
-            None if weight == resources.FontWeight.LIGHT else real(weight)
+            None if weight == resources.FontWeight.BOLD else real(weight)
         ),
     )
 
     text = "关卡"
-    faded = ui._font(20, resources.FontWeight.LIGHT).render(text, True, (255, 255, 255))
+    bold = ui._font(20, resources.FontWeight.BOLD).render(text, True, (255, 255, 255))
     regular = ui._font(20).render(text, True, (255, 255, 255))
 
-    assert _pixels(faded) == _pixels(regular)
+    assert _pixels(bold) == _pixels(regular)
 
 
 def test_font_objects_are_cached(fresh_caches) -> None:
