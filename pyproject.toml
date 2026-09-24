@@ -1,7 +1,7 @@
 [project]
 name = "another-arrow-rt265"
-version = "3.0.0"
-description = "Add your description here"
+version = "4.0.0"
+description = "A small puzzle game"
 readme = "README.md"
 authors = [
     { name = "watermelonabc", email = "2172718424@qq.com" }
