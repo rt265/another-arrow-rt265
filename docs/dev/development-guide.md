@@ -96,10 +96,11 @@ build/nuitka/another-arrow-rt265.dist/
 ```mermaid
 graph LR
     main --> game
-    game --> session & ui & audio & viewport
+    game --> session & ui & audio & custom & viewport
     session --> board & tutorial
     board --> levels & palette & sprites & viewport
-    ui --> icons & sprites & viewport
+    ui --> custom & icons & sprites & viewport
+    custom --> generator & levels
 ```
 
 | 模块 | 职责 |
@@ -110,6 +111,7 @@ graph LR
 | `board.py` | `Board`：格子几何、点击判定与碰撞、飞出动画、辅助线几何 |
 | `generator.py` | 关卡生成与求解，纯算法，不依赖 pygame |
 | `levels.py` | 关卡数据：第 1 关手写，其余由 `LEVEL_SPECS` 交给生成器 |
+| `custom.py` | 自定义模式：玩家调的参数 → 关卡（参数夹取、确定性种子、按参数缓存），不依赖 pygame |
 | `tutorial.py` | 第 1 关教程的状态机与文案 |
 | `audio.py` | `Cue` + `Audio`：背景音乐与音效，含两个静音开关 |
 | `ui.py` | 全部界面：菜单页、信息栏、结算卡片、教程提示、控件绘制与几何函数 |
@@ -133,7 +135,8 @@ graph LR
 
 `ui.py` 的 `board_area()` / `hud_home_button_rect()` / `restart_button_rect()` /
 `guide_toggle_rect()` / `overlay_button_rect()` / `menu_layout()` 等函数同时用于绘制与命中判定，
-不要在 `game.py` 里另写一份坐标算术。
+不要在 `game.py` 里另写一份坐标算术。自定义模式的滑动条与预览区同样如此：
+`custom_slider_rows()` / `custom_preview_area()` / `slider_value()` 就是那两处几何的单一来源。
 
 ### 颜色与形状
 
@@ -175,6 +178,18 @@ graph LR
 ### 加一个界面
 
 三步：在 `ui.py` 写一个 `MenuPage` → 在 `game.py` 的 `Scene` 加成员并补`_menu_page()` / `_draw()` 各一行 → 在 `Game._run_action()` 的动作表补一行。`MenuButton` 只声明动作名，这张表就是界面与逻辑之间唯一的接口（未注册的动作直接 `KeyError`）。
+
+如果新界面还要放**棋盘或自定义控件**（像“自定义模式”那样），那就得额外做三件事，它就是一个现成的样板：
+
+1. 页面描述里只放按钮（`custom_page()`），把控件与预览区的几何另写成
+   `ui.custom_slider_rows()` / `ui.custom_preview_area()`；
+2. 控件只声明“改哪个参数 + 当前取值”（`ui.SliderRow`），取值由
+   `Game._set_custom_parameter()` 写回——和按钮的动作表同一套“只声明、集中分发”；
+3. 参数一变就重建预览用的 `Board`（`Game._rebuild_custom_preview()`），
+   别就地改一块已有的棋盘：预览没有需要延续的动画。
+
+自定义模式的参数范围与生成规则全在 `custom.py` 里（不依赖 pygame，可以直接测）：
+**改范围只动那里的常量**，`tests/test_custom.py` 会把范围内的每一组参数真的生成一遍。
 
 ### 加一句界面文案
 
@@ -222,6 +237,8 @@ uv run python tools/subset_fonts.py --download  # 本机没有完整字重时（
 |--|--|
 | `.preview/ui_frames.py` | 离屏截取各界面状态图（开始 / 游戏 / 结算 / 教程 / 辅助线 / 图标表） |
 | `.preview/settings_frames.py` | 设置页开关的开 / 关 / 悬停三种状态 |
+| `.preview/custom_frames.py` | 自定义模式的关键帧（参数最小 / 最大 / 悬停、游戏内报读、结算卡片） |
+| `.preview/custom_range.py` | 自定义参数范围实测：各尺寸 / 密度下生成一关的耗时与失败率 |
 | `.preview/run_demo.py` | dummy 驱动下跑真实主循环，点一遍教程流程做冒烟 |
 | `.preview/print_levels.py` | 打印生成关卡的网格、挡住统计与求解顺序 |
 | `.preview/window_sizes.py` | 各窗口尺寸下的界面截图（检查缩放与留白） |

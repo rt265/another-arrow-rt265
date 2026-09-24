@@ -9,7 +9,7 @@ from __future__ import annotations
 import pygame
 import pytest
 
-from another_arrow_rt265 import config, ui, viewport
+from another_arrow_rt265 import config, custom, ui, viewport
 from another_arrow_rt265.audio import Audio, Cue
 from another_arrow_rt265.board import Board, ClickResult
 from another_arrow_rt265.game import Game, Scene
@@ -36,6 +36,20 @@ def _post_click(game: Game, position: tuple[int, int]) -> None:
 def _post_key(game: Game, key: int) -> None:
     """投递一次按键并立刻处理事件队列。"""
     pygame.event.post(pygame.event.Event(pygame.KEYDOWN, {"key": key}))
+    game._handle_events()
+
+
+def _post_motion(game: Game, position: tuple[int, int]) -> None:
+    """投递一次鼠标移动（拖动滑动条用）。"""
+    pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION, {"pos": position}))
+    game._handle_events()
+
+
+def _post_button_up(game: Game, position: tuple[int, int]) -> None:
+    """投递一次左键松开（拖动结束）。"""
+    pygame.event.post(
+        pygame.event.Event(pygame.MOUSEBUTTONUP, {"pos": position, "button": 1})
+    )
     game._handle_events()
 
 
@@ -300,6 +314,7 @@ def test_every_declared_menu_action_is_wired() -> None:
         ui.start_page(3, 3),
         ui.about_page(3, 3),
         ui.settings_page(True, True),
+        ui.custom_page(),
     ):
         for toggle in page.toggles:
             game._run_action(toggle.action)
@@ -964,3 +979,255 @@ def test_draw_renders_the_settings_frame() -> None:
     _post_key(game, pygame.K_s)
     game._draw()
     assert game.scene is Scene.SETTINGS
+
+
+# ---------------------------------------------------------------- 自定义模式
+
+
+def _custom_button_rect(action: str) -> pygame.Rect:
+    """返回自定义模式页脚某个按钮的区域（按动作名找，顺序由页面描述决定）。"""
+    layout = ui.menu_layout(ui.custom_page())
+    return next(rect for button, rect in layout.buttons if button.action == action)
+
+
+def _slider(game: Game, key: str) -> ui.SliderRow:
+    """返回自定义模式里某一行滑动条的几何（绘制与命中判定同源）。"""
+    return next(row for row in game._custom_sliders() if row.key == key)
+
+
+def test_level_mode_button_starts_the_built_in_levels() -> None:
+    """“关卡模式”就是原来那条路：从内置关卡的第 1 关开始。"""
+    game = Game()
+    _post_click(game, ui.start_button_rect().center)
+
+    assert game.scene is Scene.PLAYING
+    assert game.session.is_custom is False
+    assert game.session.total_levels == len(LEVELS)
+    assert game.session.level_number == 1
+
+
+def test_custom_mode_button_opens_the_custom_screen() -> None:
+    game = Game()
+    _post_click(game, ui.custom_button_rect().center)
+
+    assert game.scene is Scene.CUSTOM
+
+
+def test_custom_screen_back_button_returns_to_the_start_screen() -> None:
+    game = Game()
+    _post_click(game, ui.custom_button_rect().center)
+    _post_click(game, _custom_button_rect("home").center)
+
+    assert game.scene is Scene.START
+
+
+def test_custom_start_button_plays_the_generated_level() -> None:
+    """“开始游戏”把当前参数生成的那一关交出去：会话里只有这一关，而且不带教程。"""
+    game = Game()
+    settings = game.custom
+    size, arrows = settings.size, settings.arrows
+    _post_click(game, ui.custom_button_rect().center)
+
+    _post_click(game, _custom_button_rect("custom-start").center)
+
+    assert game.scene is Scene.PLAYING
+    assert game.session.is_custom is True
+    assert game.session.total_levels == 1
+    assert game.session.level_number == 1
+    assert game.session.board.rows == size
+    assert game.session.board.cols == size
+    assert game.session.arrows_left == arrows
+    assert game.session.tutorial is None, "自定义关卡不继承教程"
+
+
+def test_enter_on_the_custom_screen_starts_the_generated_level() -> None:
+    """页脚的主按钮就是页面的默认动作，所以 Enter / 空格也能开一局。"""
+    game = Game()
+    _post_click(game, ui.custom_button_rect().center)
+
+    _post_key(game, pygame.K_RETURN)
+
+    assert game.scene is Scene.PLAYING
+    assert game.session.is_custom is True
+
+
+def test_custom_reroll_swaps_the_level_and_keeps_the_parameters() -> None:
+    """“换一关”只换一批：参数不动、关卡与预览棋盘都换成新的。"""
+    game = Game()
+    _post_click(game, ui.custom_button_rect().center)
+    parameters = (game.custom.size, game.custom.arrows, game.custom.level)
+    preview = game.custom_board
+
+    _post_click(game, _custom_button_rect("custom-reroll").center)
+
+    assert (game.custom.size, game.custom.arrows) == parameters[:2]
+    assert game.custom.level != parameters[2]
+    assert game.custom_board is not preview, "预览棋盘要跟着换成新关卡"
+    assert game.custom_board.rows == game.custom.size
+    assert game.custom_board.remaining == game.custom.arrows
+    assert game.scene is Scene.CUSTOM
+
+
+def test_clicking_a_slider_changes_the_parameters_and_the_preview() -> None:
+    """点在轨道最右端就是把参数拉满：取值、预览棋盘一起跟上。"""
+    game = Game()
+    _post_click(game, ui.custom_button_rect().center)
+    row = _slider(game, "size")
+    preview = game.custom_board
+
+    _post_click(game, (row.track.right, row.track.centery))
+
+    assert game.custom.size == custom.MAX_SIZE
+    assert game.custom_board is not preview
+    assert game.custom_board.rows == custom.MAX_SIZE
+
+
+def test_dragging_a_slider_follows_the_mouse() -> None:
+    """按住滑动条不放：鼠标移到哪儿参数就跟到哪儿，松手之后就不再跟了。"""
+    game = Game()
+    _post_click(game, ui.custom_button_rect().center)
+    row = _slider(game, "size")
+
+    _post_click(game, (row.track.left, row.track.centery))
+    assert game.custom.size == custom.MIN_SIZE
+
+    _post_motion(game, (row.track.right, row.track.centery))
+    assert game.custom.size == custom.MAX_SIZE
+
+    _post_button_up(game, (row.track.right, row.track.centery))
+    _post_motion(game, (row.track.left, row.track.centery))
+    assert game.custom.size == custom.MAX_SIZE, "松手后鼠标移动不该再改参数"
+
+
+def test_a_shrinking_board_pulls_the_arrow_count_down(game: Game) -> None:
+    """棋盘缩小到放不下当前箭头数时，箭头数量一起夹下来（滑动条的量程也跟着缩）。"""
+    game = Game()
+    _post_click(game, ui.custom_button_rect().center)
+    size_row = _slider(game, "size")
+
+    _post_click(game, (size_row.track.right, size_row.track.centery))  # 16x16
+    arrows_row = _slider(game, "arrows")
+    _post_click(game, (arrows_row.track.right, arrows_row.track.centery))  # 顶到上限
+    assert game.custom.arrows == custom.max_arrows(custom.MAX_SIZE)
+
+    _post_click(game, (size_row.track.left, size_row.track.centery))  # 缩回 4x4
+    assert game.custom.size == custom.MIN_SIZE
+    assert game.custom.arrows == custom.max_arrows(custom.MIN_SIZE)
+    assert game.custom_board.rows == custom.MIN_SIZE
+
+
+def test_custom_screen_ignores_board_clicks_and_in_game_shortcuts(
+    game: Game,
+) -> None:
+    """自定义画面不吃游戏里的点击与快捷键：预览棋盘只是看结果的，点它什么也不会发生。"""
+    session = game.session
+    initial = session.arrows_left
+    game.show_custom()
+
+    _post_click(game, ui.custom_preview_area().center)
+    _post_key(game, pygame.K_r)
+    _post_key(game, pygame.K_g)
+    _post_key(game, pygame.K_RIGHT)
+
+    assert game.scene is Scene.CUSTOM
+    assert game.session is session
+    assert session.level_number == 1
+    assert session.arrows_left == initial
+    assert game.show_guides is False
+
+
+def test_custom_level_plays_by_the_same_rules(game: Game) -> None:
+    """自定义关卡的规则与普通关卡完全一样：点畅通的箭头就飞出棋盘。"""
+    game.start_custom()
+    session = game.session
+    arrow = next(
+        item for item in session.board.arrows if session.board.is_path_clear(item)
+    )
+
+    _post_click(game, session.board.cell_rect(arrow.row, arrow.col).center)
+
+    assert session.arrows_left == game.custom.arrows - 1
+    assert session.mistakes_left == session.max_mistakes
+
+
+def test_clearing_a_custom_level_offers_another_go(game: Game) -> None:
+    """通关自定义关卡后主按钮是“再玩一次”：点它还是这一关（自定义就只有这一关）。"""
+    game.start_custom()
+    session = game.session
+    _clear_board(session.board)
+    _settle(session)
+
+    assert session.status is GameStatus.LEVEL_CLEARED
+    assert ui.overlay_button_text(session) == "再玩一次"
+
+    _post_click(game, ui.overlay_button_rect().center)
+
+    assert game.scene is Scene.PLAYING
+    assert game.session is session, "还是同一个自定义会话"
+    assert session.is_custom is True
+    assert session.status is GameStatus.PLAYING
+    assert session.arrows_left == game.custom.arrows
+    assert session.mistakes_left == session.max_mistakes
+
+
+def test_switching_back_to_the_level_mode_restores_the_built_in_levels() -> None:
+    """玩过自定义关卡之后回“关卡模式”：拿回内置关卡列表，而不是接着玩那一关。"""
+    game = Game()
+    game.start_custom()
+    assert game.session.total_levels == 1
+
+    game.return_to_start()
+    _post_click(game, ui.start_button_rect().center)
+
+    assert game.session.is_custom is False
+    assert game.session.total_levels == len(LEVELS)
+    assert game.session.level_number == 1
+
+
+def test_settings_key_works_on_the_custom_screen() -> None:
+    """``S`` 在自定义画面也生效，而且记得从哪儿来：返回时回到参数页。"""
+    game = Game()
+    game.show_custom()
+
+    _post_key(game, pygame.K_s)
+    assert game.scene is Scene.SETTINGS
+
+    _post_key(game, pygame.K_s)
+    assert game.scene is Scene.CUSTOM
+
+
+def test_resizing_the_window_keeps_the_custom_parameters(game: Game) -> None:
+    """拖窗口只换几何：参数与关卡不变，预览棋盘换到新的预览区里。"""
+    game.start_custom()
+    game.reroll_custom()
+    level = game.custom.level
+
+    _resize_the_window(game, (1080, 1080))
+
+    assert game.custom.level == level
+    assert game.custom_board.rows == game.custom.size
+    assert game.custom_board.rect.center == ui.custom_preview_area().center
+
+
+def test_custom_sliders_are_silent_and_the_buttons_click(
+    silent: _RecordingAudio,
+) -> None:
+    """拖动是一串连续操作，因此滑动条不发声；页脚按钮照旧响一下。"""
+    game = Game(audio_player=silent)
+    game.show_custom()
+    row = _slider(game, "size")
+
+    _post_click(game, row.rect.center)
+    _post_motion(game, (row.track.right, row.track.centery))
+    _post_button_up(game, (row.track.right, row.track.centery))
+    assert silent.played == [], "滑动条不该发声"
+
+    _post_click(game, _custom_button_rect("custom-reroll").center)
+    assert silent.played == [Cue.BUTTON]
+
+
+def test_draw_renders_the_custom_frame() -> None:
+    game = Game()
+    game.show_custom()
+    game._draw()
+    assert game.scene is Scene.CUSTOM

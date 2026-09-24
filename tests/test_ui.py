@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import itertools
+from dataclasses import replace
 
 import pygame
 import pytest
 
-from another_arrow_rt265 import config, icons, tutorial, ui, viewport
+from another_arrow_rt265 import config, custom, icons, tutorial, ui, viewport
+from another_arrow_rt265.board import Board
 from another_arrow_rt265.levels import LEVELS, Level
 from another_arrow_rt265.session import GameStatus, Session
 
@@ -32,12 +34,18 @@ MENU_PAGES = (
     ui.about_page(3, 3),
     ui.settings_page(True, True),
     ui.settings_page(False, False),
+    ui.custom_page(),
 )
 
 
 def _session() -> Session:
     """创建一个只有一关（因此也是最后一关）的会话。"""
     return Session(AREA, levels=(CLEARABLE_LEVEL,))
+
+
+def _custom_session() -> Session:
+    """创建一个“自定义模式”的会话：只有一关，而且是十字关卡（点哪都撞）。"""
+    return Session(AREA, levels=(CROSS_LEVEL,), max_mistakes=1, is_custom=True)
 
 
 def _surface() -> pygame.Surface:
@@ -195,16 +203,38 @@ def test_guide_toggle_content_fits_inside_the_pill() -> None:
     assert 2 * config.SWITCH_KNOB_RADIUS + 2 <= track.height, "滑块要放得进轨道"
 
 
-def test_start_button_is_centred_on_the_page() -> None:
-    """首屏主按钮是整页的重心：横向居中 + **竖直居中**（压在窗口中线上）。"""
-    button = ui.start_button_rect()
-    footer = ui.about_button_rect()
+def test_start_screen_hero_row_holds_both_modes() -> None:
+    """首屏主按钮行是两个玩法入口：“关卡模式”（主按钮）+“自定义模式”，整行居中。
 
-    assert button.centerx == config.WINDOW_WIDTH // 2
-    assert button.centery == config.WINDOW_HEIGHT // 2
-    assert 0 <= button.left and button.right <= config.WINDOW_WIDTH
-    # 按钮在中线上，上方还有标题与装饰，下方不压到页脚的“关于”。
-    assert button.bottom < footer.top
+    事项 19 把“开始游戏”拆成了这两种玩法，它们是同一件事的两条路，
+    因此同占主按钮那一行，而不是一个在主按钮位、另一个被挤到页脚。
+    """
+    levels = ui.start_button_rect()
+    custom_mode = ui.custom_button_rect()
+    footer = ui.settings_button_rect()
+
+    assert levels.right < custom_mode.left, "两个入口不重叠"
+    assert levels.left + custom_mode.right == config.WINDOW_WIDTH, "整行横向居中"
+    # 整行仍然压在窗口中线上（与事项 25 的“首屏主按钮竖直居中”同一条口径）。
+    assert levels.centery == config.WINDOW_HEIGHT // 2
+    assert custom_mode.centery == levels.centery
+    assert levels.size == custom_mode.size
+    # 两个入口在中线上，下方不压到页脚的“设置 / 关于”。
+    assert levels.bottom < footer.top
+
+
+def test_start_screen_marks_the_level_mode_as_the_primary_button() -> None:
+    """主按钮（金色）是“关卡模式”：自定义模式是另一条路，但不抢主按钮的强调色。"""
+    page = ui.start_page(3, 3)
+    hero = [
+        button
+        for button in page.buttons
+        if button.placement is ui.MenuButtonPlacement.HERO
+    ]
+
+    assert [button.text for button in hero] == ["关卡模式", "自定义模式"]
+    assert [button.action for button in hero] == ["start", "custom"]
+    assert [button.primary for button in hero] == [True, False]
 
 
 def test_start_screen_footer_holds_the_settings_and_about_buttons() -> None:
@@ -296,11 +326,19 @@ def test_menu_page_buttons_come_from_the_page_description() -> None:
     layout = ui.menu_layout(ui.start_page(3, 3))
     actions = {button.action for button, _ in layout.buttons}
 
-    assert actions == {"start", "settings", "about"}
+    assert actions == {"start", "custom", "settings", "about"}
     assert ui.menu_layout(ui.about_page(3, 3)).buttons[0][0].action == "home"
     assert ui.menu_layout(ui.settings_page(True, False)).buttons[0][0].action == (
         "settings-back"
     )
+    # 自定义模式的页脚从左到右是“返回 / 换一关 / 开始游戏”，开始游戏是主按钮。
+    custom_buttons = ui.menu_layout(ui.custom_page()).buttons
+    assert [button.action for button, _ in custom_buttons] == [
+        "home",
+        "custom-reroll",
+        "custom-start",
+    ]
+    assert custom_buttons[-1][0].primary
 
 
 def test_menu_page_text_fits_inside_its_section() -> None:
@@ -433,6 +471,173 @@ def test_draw_settings_screen_covers_the_whole_window() -> None:
     assert surface.get_at((2, config.WINDOW_HEIGHT - 3))[:3] != (255, 0, 255), (
         "设置界面应该连背景一起画，不留未覆盖的角落"
     )
+
+
+# ---------------------------------------------------------------- 自定义模式
+
+
+def _slider_rows(
+    size: int = 8, arrows: int = 20, maximum: int = 32
+) -> tuple[ui.SliderRow, ...]:
+    """返回自定义模式两行滑动条的几何（量程上限可以直接指定，便于做对照）。"""
+    return ui.custom_slider_rows(size, arrows, maximum)
+
+
+def test_custom_page_only_holds_its_footer_buttons() -> None:
+    """自定义页只有标题与页脚三个按钮：滑动条与实时预览另有自己的几何函数。"""
+    page = ui.custom_page()
+    layout = ui.menu_layout(page)
+
+    assert page.sections == ()
+    assert page.toggles == ()
+    assert page.hint is None
+    assert layout.sections == ()
+    assert layout.hint is None
+    assert [button.text for button, _ in layout.buttons] == [
+        "返回",
+        "换一关",
+        "开始游戏",
+    ]
+    # 主按钮是“开始游戏”，因此 Enter / 空格进来就是开一局。
+    assert page.default_action() == "custom-start"
+
+
+def test_custom_slider_rows_follow_the_parameters() -> None:
+    """两行滑动条把参数、量程与当前取值如实带出来，并且都落在窗口里、互不重叠。"""
+    size_row, arrow_row = _slider_rows(size=10, arrows=40, maximum=50)
+
+    assert (size_row.key, size_row.label) == ("size", "棋盘边长")
+    assert (size_row.value, size_row.minimum, size_row.maximum) == (
+        10,
+        custom.MIN_SIZE,
+        custom.MAX_SIZE,
+    )
+    assert (arrow_row.key, arrow_row.label) == ("arrows", "箭头数量")
+    assert (arrow_row.value, arrow_row.minimum, arrow_row.maximum) == (
+        40,
+        custom.MIN_ARROWS,
+        50,
+    )
+    for row in (size_row, arrow_row):
+        assert 0 <= row.rect.left and row.rect.right <= config.WINDOW_WIDTH
+        assert 0 <= row.rect.top and row.rect.bottom <= config.WINDOW_HEIGHT
+        assert row.rect.contains(row.track), "轨道要落在那一行里面"
+        assert row.track.centery == row.rect.centery
+    assert size_row.rect.right < arrow_row.rect.left, "两行左右并排、不重叠"
+    assert size_row.rect.width == arrow_row.rect.width
+
+
+def test_custom_slider_track_ignores_the_readout_width() -> None:
+    """读数位数变了（8 与 128）轨道也得纹丝不动：否则拖动时量程会跟着变来变去。"""
+    narrow = _slider_rows(arrows=8, maximum=128)[1].track
+    wide = _slider_rows(arrows=128, maximum=128)[1].track
+
+    assert narrow == wide
+
+
+def test_custom_slider_value_round_trips() -> None:
+    """“点哪里取哪个值”与“取值画在哪儿”互逆，并且两端把量程夹得死死的。"""
+    row = _slider_rows(arrows=20, maximum=50)[1]
+    left, right = ui._slider_thumb_span(row)
+
+    assert ui.slider_value(row, left) == row.minimum
+    assert ui.slider_value(row, right) == row.maximum
+    assert ui.slider_value(row, left - 500) == row.minimum, "拖到轨道外面也夹回量程"
+    assert ui.slider_value(row, right + 500) == row.maximum
+
+    for value in (1, 7, 20, 49, 50):
+        moved = replace(row, value=value)
+        thumb = ui._slider_thumb_x(moved)
+        # 量程比像素还密时（128 档挤在一百多像素里）来回换算最多差一档。
+        assert abs(ui.slider_value(moved, thumb) - value) <= 1
+
+    # 取值越大滑块越靠右。
+    positions = [ui._slider_thumb_x(replace(row, value=value)) for value in (1, 20, 50)]
+    assert positions == sorted(positions)
+    assert positions[0] < positions[-1]
+
+
+def test_custom_preview_stays_clear_of_the_controls() -> None:
+    """预览棋盘不压标题、两行滑动条与页脚按钮：预览区取的是中间那块留白。"""
+    rows = [row.rect for row in _slider_rows()]
+    footer = [rect for _, rect in ui.menu_layout(ui.custom_page()).buttons]
+    subtitle = viewport.y(ui._CUSTOM_SUBTITLE_Y)
+
+    for size in range(custom.MIN_SIZE, custom.MAX_SIZE + 1):
+        settings = custom.CustomLevel(size, custom.default_arrows(size))
+        panel = Board(settings.level, ui.custom_preview_area()).panel_rect
+
+        assert panel.top >= subtitle, f"{size}x{size} 的预览压到了标题"
+        assert panel.left >= 0 and panel.right <= config.WINDOW_WIDTH
+        for rect in (*rows, *footer):
+            assert not panel.colliderect(rect), f"{size}x{size} 的预览压到了控件"
+
+
+def test_draw_custom_screen_renders_without_error() -> None:
+    surface = _surface()
+
+    for size in (custom.MIN_SIZE, custom.DEFAULT_SIZE, custom.MAX_SIZE):
+        settings = custom.CustomLevel(size, custom.default_arrows(size))
+        row = _slider_rows(settings.size, settings.arrows, settings.max_arrows)[0].rect
+        ui.draw_custom_screen(surface, settings)
+        ui.draw_custom_screen(surface, settings, row.center)
+
+
+def test_draw_custom_screen_covers_the_whole_window() -> None:
+    """自定义画面连背景一起画（预览棋盘由 ``Game`` 贴在中间那块留白上）。"""
+    surface = _surface()
+    surface.fill((255, 0, 255))
+
+    ui.draw_custom_screen(surface, custom.CustomLevel())
+
+    assert surface.get_at((2, 2))[:3] != (255, 0, 255)
+    assert surface.get_at((config.WINDOW_WIDTH - 3, 2))[:3] != (255, 0, 255)
+    assert surface.get_at((2, config.WINDOW_HEIGHT - 3))[:3] != (255, 0, 255), (
+        "自定义画面应该连背景一起画，不留未覆盖的角落"
+    )
+
+
+def test_custom_slider_fill_follows_the_value() -> None:
+    """滑过的那一段填主色：取值越大填得越长（“调到哪儿了”一眼看得出来）。"""
+    row = _slider_rows(custom.MIN_SIZE, 1, 32)[0]
+    small, large = _surface(), _surface()
+
+    ui.draw_custom_screen(small, custom.CustomLevel(custom.MIN_SIZE, 1))
+    ui.draw_custom_screen(large, custom.CustomLevel(custom.MAX_SIZE, 1))
+
+    assert _color_hits(small, config.SLIDER_TRACK_FILL, row.rect) < _color_hits(
+        large, config.SLIDER_TRACK_FILL, row.rect
+    )
+    # 没滑到的那一段仍然是底色（两档都还剩得下一点）。
+    assert _color_hits(large, config.SLIDER_TRACK_REST, row.rect) > 0
+
+
+def test_level_chip_reports_the_custom_level() -> None:
+    """自定义关卡报“自定义”：它只有一关，报“1 / 1”是误导。"""
+    assert ui.level_chip_text(_session()) == "1 / 1"
+    assert ui.level_chip_text(_custom_session()) == "自定义"
+
+
+def test_level_chip_has_room_for_the_custom_label() -> None:
+    """信息栏第一段要放得下“自定义”（三个 24 号字 + 两侧留白）。"""
+    level_chip = ui.hud_chip_rects()[0]
+    label = ui._TEXT_VALUE.font().render("自定义", True, config.COLOR_PRIMARY)
+
+    assert label.get_width() + 2 * ui._HUD_CHIP_PADDING <= level_chip.width
+
+
+def test_custom_result_texts() -> None:
+    """自定义关卡的结算文案不提“第 N 关 / 全部 N 关”：它本来就是唯一的一关。"""
+    session = _custom_session()
+    session.click(session.board.cell_rect(0, 1).center)
+    assert session.status is GameStatus.FAILED
+
+    assert ui._result_message(session) == "失误次数已用完，本关未通过"
+    assert ui.overlay_button_text(session) == "重试本关"
+
+    session.status = GameStatus.LEVEL_CLEARED
+    assert ui._result_message(session) == "自定义关卡已通关"
+    assert ui.overlay_button_text(session) == "再玩一次"
 
 
 # ---------------------------------------------------------------- 文案
@@ -655,6 +860,7 @@ def test_menu_pages_are_visually_distinct() -> None:
         lambda surface: ui.draw_start_screen(surface, session),
         lambda surface: ui.draw_about_screen(surface, session),
         lambda surface: ui.draw_settings_screen(surface, True, True),
+        lambda surface: ui.draw_custom_screen(surface, custom.CustomLevel()),
     ):
         surface = _surface()
         draw(surface)
@@ -846,7 +1052,11 @@ def test_menu_pages_stay_centred_and_inside_the_design_box(
         for rect in blocks:
             assert box.contains(rect), page.title
 
-    assert ui.start_button_rect().centerx == window.center()[0]
+    levels, custom_mode = ui.start_button_rect(), ui.custom_button_rect()
+    # 主按钮行整行居中：两侧留白相等（取整可能差一个像素）。
+    assert abs(levels.left - (window.size[0] - custom_mode.right)) <= 1
+    assert levels.centery == window.center()[1]
+    assert levels.right < custom_mode.left
 
 
 def test_guide_toggle_never_covers_a_cell_at_any_window_size(
@@ -861,6 +1071,22 @@ def test_guide_toggle_never_covers_a_cell_at_any_window_size(
                 assert not toggle.colliderect(board.cell_rect(row, col)), (
                     f"第 {index + 1} 关的 ({row}, {col}) 被辅助线开关压住了"
                 )
+
+
+def test_custom_screen_keeps_its_layout_at_any_window_size(
+    window: viewport.Viewport,
+) -> None:
+    """自定义模式的滑动条与预览也一起缩放：都在设计框里，且预览不压控件。"""
+    box = window.rect(0, 0, *config.WINDOW_SIZE)
+    settings = custom.CustomLevel(8, 26)
+    rows = [row.rect for row in ui.custom_slider_rows(8, 26, 32)]
+    footer = [rect for _, rect in ui.menu_layout(ui.custom_page()).buttons]
+    panel = Board(settings.level, ui.custom_preview_area()).panel_rect
+
+    assert box.contains(ui.custom_preview_area())
+    for rect in (*rows, *footer):
+        assert box.contains(rect)
+        assert not panel.colliderect(rect), "预览棋盘不该压到滑动条或页脚按钮"
 
 
 def test_text_is_rendered_at_the_scaled_size() -> None:

@@ -231,6 +231,21 @@ OVERLAY_ALPHA: Final[int] = 200
 COLOR_SUCCESS: Final[Color] = (108, 220, 156)
 COLOR_FAILURE: Final[Color] = (238, 92, 92)
 
+# ------------------------------------------------------------------ 滑动条
+# 自定义模式的两个参数控件（棋盘边长 / 箭头数量）：左边标签、右边读数，
+# 中间一条滑动条。轨道是胶囊、滑块是正圆——与滑动开关同一种“连续量”的形状语义
+# （见 UI_RADIUS 的例外说明）；用色正好相反：开关靠“哪一侧”表达开与关，
+# 滑动条则把**滑过的那一段**填成主色，于是“调到哪儿了”从颜色与滑块两处都看得出来。
+SLIDER_TRACK_HEIGHT: Final[int] = 20
+SLIDER_THUMB_RADIUS: Final[int] = 8
+# 行内左右留白，以及标签 / 读数与轨道之间的间隙。
+SLIDER_TRACK_PADDING: Final[int] = 14
+SLIDER_GAP: Final[int] = 12
+# 颜色沿用“一个颜色一个角色”：轨道底色与滑块与开关共用，滑过的一段用主色。
+SLIDER_TRACK_REST: Final[Color] = SWITCH_TRACK_OFF
+SLIDER_TRACK_FILL: Final[Color] = COLOR_PRIMARY
+SLIDER_THUMB: Final[Color] = SWITCH_KNOB_ON
+
 # ------------------------------------------------------------------ 音频
 # 两条音量分开：背景音乐是长时间循环的底噪，压低到“听得出有，但不抢注意力”；
 # 音效是短促的操作反馈（点按钮、箭头飞出、撞墙、通关 / 失败），要能一耳朵听清，

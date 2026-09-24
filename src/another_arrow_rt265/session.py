@@ -51,6 +51,8 @@ class Session:
         levels: tuple[Level, ...] = LEVELS,
         max_mistakes: int = config.MAX_MISTAKES,
         level_index: int = 0,
+        *,
+        is_custom: bool = False,
     ) -> None:
         """创建会话并载入首个关卡。
 
@@ -59,6 +61,11 @@ class Session:
             levels: 关卡列表，至少包含一关。
             max_mistakes: 每一关允许的失误次数，必须为正数。
             level_index: 起始关卡序号，越界时自动取模。
+            is_custom: 这份关卡列表是不是“自定义模式”捏出来的那一关
+                （见 :mod:`another_arrow_rt265.custom`）。它**只影响界面怎么报读**
+                （关卡读数与结算文案，见 ``ui``）：自定义模式只有一关、也没有
+                “下一关”，所以信息栏报的是“自定义”而不是“1 / 1”。规则层的行为与
+                普通关卡完全一致——尤其不会带上教程，见 :meth:`_needs_tutorial`。
 
         Raises:
             ValueError: 关卡列表为空或失误次数不是正数时抛出。
@@ -73,6 +80,7 @@ class Session:
         self.levels = levels
         self.area = area
         self.max_mistakes = max_mistakes
+        self.is_custom = is_custom
         self.status = GameStatus.PLAYING
         self._cleared_pause = 0.0
         # 最佳用时按“关卡序号”记录，不随重开本关或回到主界面清空。

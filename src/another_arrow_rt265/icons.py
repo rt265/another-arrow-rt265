@@ -56,6 +56,9 @@ class Icon(Enum):
     INFO = "info"
     """信息：打开“关于”界面。"""
 
+    SLIDERS = "sliders"
+    """滑动条：打开“自定义模式”（进去就是调参数）。"""
+
 
 def draw_icon(
     surface: pygame.Surface,
@@ -116,8 +119,10 @@ def _draw(
         _draw_back(surface, center, size, color)
     elif icon is Icon.SETTINGS:
         _draw_settings(surface, center, size, color)
-    else:
+    elif icon is Icon.INFO:
         _draw_info(surface, center, size, color)
+    else:
+        _draw_sliders(surface, center, size, color)
 
 
 def _stroke_width(size: float) -> int:
@@ -356,3 +361,40 @@ def _draw_settings(
         round(half * 0.62),
         width=stroke,
     )
+
+
+def _draw_sliders(
+    surface: pygame.Surface,
+    center: tuple[float, float],
+    size: float,
+    color: config.Color,
+) -> None:
+    """滑动条：三条带滑块的横线（界面里最通用的“调参数”图形）。
+
+    图标是单色的，所以滑块与轨道同色——靠**粗细**与位置区分：轨道是细线，
+    滑块是坐在轨道上的实心圆点。三条线的滑块错开摆在左 / 中 / 右，
+    读起来是“一组可以分别调的参数”，而不是三条一模一样的横杠。
+    """
+    center_x, center_y = center
+    half = size / 2.0
+    stroke = _stroke_width(size)
+    knob_radius = max(2, round(size * 0.15))
+    # 滑块的相对横坐标（左 / 中 / 右错开）与三条线的相对纵坐标。
+    knob_offsets = (-0.44, 0.30, -0.08)
+    span = half * 0.90
+
+    for index, knob_offset in enumerate(knob_offsets):
+        y = center_y + half * (index - 1) * 0.60
+        pygame.draw.line(
+            surface,
+            color,
+            (center_x - span, y),
+            (center_x + span, y),
+            width=stroke,
+        )
+        pygame.draw.circle(
+            surface,
+            color,
+            (round(center_x + span * knob_offset), round(y)),
+            knob_radius,
+        )

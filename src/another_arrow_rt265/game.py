@@ -1,10 +1,14 @@
 """游戏主循环。
 
-窗口由三个画面组成，切换逻辑集中在 :class:`Game` 里：
+窗口由五个画面组成，切换逻辑集中在 :class:`Game` 里：
 
-- **开始界面**（:class:`Scene.START`）：标题、玩法说明与“开始游戏”按钮，
-  页脚是“关于”入口；
-- **关于界面**（:class:`Scene.ABOUT`）：玩法、操作与制作信息，页脚按钮回主界面；
+- **开始界面**（:class:`Scene.START`）：标题、方向箭头装饰与两个玩法入口——
+  “关卡模式”（内置关卡）与“自定义模式”；页脚是“设置 / 关于”；
+- **关于界面**（:class:`Scene.ABOUT`）：制作信息，页脚按钮回主界面；
+- **设置界面**（:class:`Scene.SETTINGS`）：音乐 / 音效两个开关，页脚“返回”回到打开它的画面；
+- **自定义模式**（:class:`Scene.CUSTOM`）：两行滑动条调棋盘边长与箭头数量，
+  中间那块棋盘是**实时预览**（参数一动就重新生成，见
+  :mod:`another_arrow_rt265.custom`），页脚是“返回 / 换一关 / 开始游戏”；
 - **游戏画面**（:class:`Scene.PLAYING`）：顶部信息栏（回到主界面 / 关卡 /
   剩余箭头 / 用时 / 失误 / 重新开始）+ 棋盘，通关或失败时在棋盘之上叠一张
   结算卡片；第 1 关还会在棋盘上方挂一条可交互的教程提示
@@ -14,6 +18,9 @@
 点击棋盘上的箭头，畅通则飞出、被阻挡则扣一次失误（见 ``board`` / ``session``）；
 失误耗尽弹出失败卡片，可重试本关；清空全部箭头弹出通关卡片，可进入下一关。
 信息栏左上角与结算卡片上都提供“回到主界面”，随时可以退回标题画面。
+**自定义模式是另一份关卡列表**：它只有一关，因此通关卡片的主按钮是“再玩一次”；
+两种模式各有自己的会话（见 :meth:`start` / :meth:`start_custom`），
+互不串场。
 
 **辅助线**（事项 11）是一个可选功能，默认关闭：右下角有一颗常驻开关（``G`` 键同效），
 打开后每个箭头都沿当前的前进方向拉一条虚线——顶到棋盘边缘说明点得动，
@@ -45,6 +52,19 @@
 或游戏中的 ``S`` 键打开，并且**记得自己是从哪儿来的**：除了回开始界面，它还能回游戏，
 回去时关卡进度、失误、计时与教程进度都不变（见 :meth:`show_settings` /
 :meth:`leave_settings`）。
+
+**自定义模式**（事项 19）把参数放在 :attr:`Game.custom`（一个
+:class:`~another_arrow_rt265.custom.CustomLevel`）上，画面上的两行滑动条只声明
+“改哪个参数”（:class:`~another_arrow_rt265.ui.SliderRow`），取值由
+:meth:`Game._set_custom_parameter` 写回：参数真的变了才重建预览棋盘
+（:meth:`_rebuild_custom_preview`），因此拖动滑动条时“生成”与“预览刷新”都只发生
+在取值跨过一档的那一帧。预览用的是一块**真正的**
+:class:`~another_arrow_rt265.board.Board`（:attr:`Game.custom_board`），
+所以参数区里看到的箭头与进场后完全一致；它只负责画，点击一律不落到它身上。
+“开始游戏”把当前参数生成的关卡交给一个**只含这一关**的会话
+（:meth:`start_custom`），于是规则层不必知道“自定义”这回事，
+只有信息栏与结算文案按 :attr:`~another_arrow_rt265.session.Session.is_custom`
+换个说法（见 ``ui.level_chip_text`` / ``ui.overlay_button_text``）。
 """
 
 from __future__ import annotations
@@ -53,8 +73,8 @@ from enum import Enum
 
 import pygame
 
-from another_arrow_rt265 import audio, config, ui, viewport
-from another_arrow_rt265.board import ClickResult
+from another_arrow_rt265 import audio, config, custom, ui, viewport
+from another_arrow_rt265.board import Board, ClickResult
 from another_arrow_rt265.session import GameStatus, Session
 
 
@@ -62,13 +82,16 @@ class Scene(Enum):
     """窗口当前显示的画面。"""
 
     START = "start"
-    """开始界面：等待玩家点击“开始游戏”，此时不响应棋盘点击。"""
+    """开始界面：等待玩家挑一种玩法（关卡模式 / 自定义模式），此时不响应棋盘点击。"""
 
     ABOUT = "about"
     """关于界面：制作信息，只有一个“返回主界面”按钮。"""
 
     SETTINGS = "settings"
     """设置界面：音乐 / 音效两个开关，页脚“返回”回到打开它的那个画面。"""
+
+    CUSTOM = "custom"
+    """自定义模式：两行滑动条调参数，中间实时预览生成出来的关卡。"""
 
     PLAYING = "playing"
     """游戏画面：棋盘、信息栏与结算卡片（结算状态由 ``Session`` 决定）。"""
@@ -110,6 +133,14 @@ class Game:
         # 窗口尺寸变化时由 `_sync_window_size()` 重建，会话则只换棋盘几何、不丢进度。
         self.viewport = viewport.set_current(viewport.Viewport.fit(config.WINDOW_SIZE))
         self.session = Session(ui.board_area(), level_index=level_index)
+        # 自定义模式（事项 19）：参数与实时预览都留在窗口上，因此回主界面、
+        # 进设置、开一局再回来，调好的参数还是那副样子。
+        self.custom = custom.CustomLevel()
+        # 预览用的是一块**真正的棋盘**：画法与游戏里完全同源，参数一变就换一块
+        # （见 `_rebuild_custom_preview`）。它只参与绘制，不接任何点击。
+        self.custom_board = Board(self.custom.level, ui.custom_preview_area())
+        # 正在拖的那一行滑动条（参数名），没在拖时为 None；见 `_handle_drag`。
+        self._dragging_slider: str | None = None
         # 上一次看到的会话状态：用它把“状态变了”翻成一声通关 / 失败音效，
         # 因此不论状态是在点击里还是在刷新里翻的，都不会漏掉或多放。
         self._last_status = self.session.status
@@ -144,6 +175,8 @@ class Game:
         self.viewport = viewport.set_current(viewport.Viewport.fit(surface.get_size()))
         # 只换棋盘几何：关卡、失误、计时与教程进度都不重置。
         self.session.resize(ui.board_area())
+        # 自定义模式的预览也是一块棋盘，同样跟着窗口换尺寸。
+        self.custom_board.reshape(ui.custom_preview_area())
         return True
 
     def _update(self, dt: float) -> None:
@@ -174,7 +207,14 @@ class Game:
             self.audio.play(audio.Cue.LEVEL_FAILED)
 
     def start(self) -> None:
-        """离开开始界面，从第 1 关开始新的一局（第 1 关带交互式教程）。"""
+        """离开开始界面，从第 1 关开始新的一局（第 1 关带交互式教程）。
+
+        从“自定义模式”回来时会**重建会话**：自定义关卡是另一份关卡列表，不重建的话
+        关卡模式会接着玩刚才捏出来的那一关（见 :meth:`start_custom`）。因此
+        切模式会重新开一局，本关的最佳成绩也从头记起。
+        """
+        if self.session.is_custom:
+            self._swap_session(Session(self.session.area))
         self.session.load_level(0)
         self.scene = Scene.PLAYING
 
@@ -186,6 +226,45 @@ class Game:
     def show_about(self) -> None:
         """切到“关于”界面（返回主界面走 :meth:`return_to_start`）。"""
         self.scene = Scene.ABOUT
+
+    def show_custom(self) -> None:
+        """切到“自定义模式”界面：参数与预览都保持上次离开时的样子。
+
+        它和设置界面不一样，**不记“从哪儿来”**：参数页是开始界面的一个入口，
+        页脚的“返回”就是回主界面（动作表里的 ``home``），不存在“回游戏”这回事。
+        """
+        self.scene = Scene.CUSTOM
+
+    def start_custom(self) -> None:
+        """用当前参数生成的那一关开一局（自定义模式只有这一关）。
+
+        自定义模式与关卡模式各拿一个会话：这里把会话换成“只含这一关”的新会话，
+        因此规则层不需要认识“自定义”这个概念，它看到的只是一份只有一关的关卡列表；
+        界面要换个说法时读 :attr:`~another_arrow_rt265.session.Session.is_custom`。
+        """
+        self._swap_session(
+            Session(
+                self.session.area,
+                levels=(self.custom.level,),
+                max_mistakes=self.session.max_mistakes,
+                is_custom=True,
+            )
+        )
+        self.scene = Scene.PLAYING
+
+    def reroll_custom(self) -> None:
+        """自定义模式的“换一关”：参数不动，让同一组参数换出另一关。"""
+        self.custom.reroll()
+        self._rebuild_custom_preview()
+
+    def _swap_session(self, session: Session) -> None:
+        """换一个会话（切模式时用），并把音频的“状态变化”基准一起挪过去。
+
+        不挪的话新会话的第一帧就会被当成一次状态变化——虽然它落到“进行中”上、
+        不会真的出声，但基准对不上总归是个隐患（见 :meth:`_sync_audio_status`）。
+        """
+        self.session = session
+        self._last_status = session.status
 
     def show_settings(self) -> None:
         """打开“设置”界面（记下是从哪个画面进来的，返回时回到原处）。
@@ -217,16 +296,20 @@ class Game:
         self.audio.sound_enabled = not self.audio.sound_enabled
 
     def _menu_page(self) -> ui.MenuPage:
-        """返回当前菜单页的页面描述（只在开始 / 关于 / 设置这类菜单画面上调用）。
+        """返回当前菜单页的页面描述（只在开始 / 关于 / 设置 / 自定义这类画面上调用）。
 
         关卡总数与失误上限取自会话，所以“关于”界面里的数字与开始界面页脚
         提示行是同一个口径；设置界面的入参则是两个开关的**当前状态**，
         因此状态一变，页面描述（也就是开关画成开还是关）跟着变。
+        自定义模式的页面描述不带参数——它的两行滑动条与实时预览另有几何函数
+        （见 :mod:`another_arrow_rt265.ui`）。
         """
         if self.scene is Scene.ABOUT:
             return ui.about_page(self.session.total_levels, self.session.max_mistakes)
         if self.scene is Scene.SETTINGS:
             return ui.settings_page(self.audio.music_enabled, self.audio.sound_enabled)
+        if self.scene is Scene.CUSTOM:
+            return ui.custom_page()
         return ui.start_page(self.session.total_levels, self.session.max_mistakes)
 
     def _handle_events(self) -> None:
@@ -243,12 +326,19 @@ class Game:
                 # 用事件自带坐标而不是 pygame.mouse.get_pos()，避免鼠标在
                 # 事件入队后又被移动而导致点击落到别的格子上。
                 self._handle_click(event.pos)
+            elif event.type == pygame.MOUSEMOTION:
+                # 只有按住某一行滑动条时才有意义（见 `_handle_drag`）。
+                self._handle_drag(event.pos)
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                # 松开左键就是一次拖动的结尾，不论松开时鼠标在哪里。
+                self._dragging_slider = None
 
     def _handle_click(self, position: tuple[int, int]) -> None:
         """处理左键点击：菜单页按声明的按钮命中，游戏画面先判按钮再落到棋盘。
 
         菜单页上的按钮来自 :class:`~another_arrow_rt265.ui.MenuPage` 的描述，
-        因此新增界面时这里不必再改；游戏画面左上角与结算卡片左下角都有
+        因此新增界面时这里不必再改；自定义模式先判两行滑动条，再交给页脚按钮
+        （见 :meth:`_handle_custom_click`）；游戏画面左上角与结算卡片左下角都有
         “回到主界面”；右下角的“辅助线”开关先于棋盘判定（它摆在棋盘外面，
         但万一以后调布局压到了棋盘，也应当是开关优先）；结算界面其余区域不响应
         棋盘点击；第 1 关的教程提示条只让“跳过教程”生效，条上的其他位置吃掉点击，
@@ -256,7 +346,11 @@ class Game:
 
         音效跟着“结果”而不是“位置”走：碰到按钮就响按钮声，碰到棋盘则由
         :meth:`_click_board` 按棋盘的答复选声（另见 :meth:`_sync_audio_status`）。
+        滑动条是唯一**不发声**的控件：拖动是一串连续操作，每跨一档就响一声会变成噪声。
         """
+        if self.scene is Scene.CUSTOM:
+            self._handle_custom_click(position)
+            return
         if self.scene is not Scene.PLAYING:
             self._handle_menu_click(position)
             return
@@ -318,12 +412,79 @@ class Game:
                 self._run_action(button.action)
                 return
 
+    # ------------------------------------------------------------ 自定义模式
+
+    def _custom_sliders(self) -> tuple[ui.SliderRow, ...]:
+        """当前参数下两行滑动条的几何（绘制与命中判定共用同一份坐标）。"""
+        return ui.custom_slider_rows(
+            self.custom.size, self.custom.arrows, self.custom.max_arrows
+        )
+
+    def _handle_custom_click(self, position: tuple[int, int]) -> None:
+        """自定义模式：先判两行参数滑动条，剩下的交给页脚按钮。
+
+        按下滑动条就顺手记下“正在拖它”（见 :meth:`_handle_drag`），因此按住不放
+        一直拖着也能连续调节；点在滑动条之外的空白处什么也不发生（既不落到预览
+        棋盘上，也不出声），预览本身**不接受点击**——它是看结果的，不是玩的。
+
+        滑动条不发声（拖动是一串连续操作，每跨一档响一声会变成噪声），
+        页脚按钮照旧由 :meth:`_run_action` 负责响声。
+        """
+        for row in self._custom_sliders():
+            if row.rect.collidepoint(position):
+                self._dragging_slider = row.key
+                self._set_custom_parameter(row.key, ui.slider_value(row, position[0]))
+                return
+        self._handle_menu_click(position)
+
+    def _handle_drag(self, position: tuple[int, int]) -> None:
+        """拖动滑动条：按住不放时鼠标移到哪儿，参数就跟到哪儿。
+
+        没在拖（或已经离开自定义模式）时什么都不做，因此普通的鼠标移动不会
+        误改参数；松手由 ``MOUSEBUTTONUP`` 收尾（见 :meth:`_handle_events`）。
+        """
+        if self._dragging_slider is None or self.scene is not Scene.CUSTOM:
+            return
+        for row in self._custom_sliders():
+            if row.key == self._dragging_slider:
+                self._set_custom_parameter(row.key, ui.slider_value(row, position[0]))
+                return
+
+    def _set_custom_parameter(self, key: str, value: int) -> None:
+        """把滑动条的新取值写回自定义参数，参数真的变了才重建预览棋盘。
+
+        参数名就是控件声明的 ``key``（见
+        :class:`~another_arrow_rt265.ui.SliderRow`）；夹边界与“值没变就不重算”
+        都由 :class:`~another_arrow_rt265.custom.CustomLevel` 负责，
+        因此拖到量程外、点在滑块当前位置上都不会有空转。
+
+        Raises:
+            KeyError: 参数名没有登记（通常是滑动条写错了 ``key``）。
+        """
+        if key == "size":
+            changed = self.custom.change_size(value)
+        elif key == "arrows":
+            changed = self.custom.change_arrows(value)
+        else:
+            msg = f"未注册的自定义参数：{key}"
+            raise KeyError(msg)
+        if changed:
+            self._rebuild_custom_preview()
+
+    def _rebuild_custom_preview(self) -> None:
+        """按新的关卡重建预览棋盘。
+
+        预览是一块真棋盘（箭头、配色、格子几何全部与游戏里同源），换取代价是
+        “参数一变就换一块对象”——它没有需要延续的动画，重新建比就地改关卡简单得多。
+        """
+        self.custom_board = Board(self.custom.level, ui.custom_preview_area())
+
     def _handle_key(self, key: int) -> None:
         """处理按键：``Esc`` 退出，``Enter`` / 空格触发主按钮，``H`` 回主界面。
 
         ``H`` 与 ``S`` 在任何画面上都生效（``S`` 是设置界面的开关：开着就关上、
-        关着就打开）；``R``、``G`` 与左右方向键只在游戏画面生效，免得在开始界面
-        误触改掉进度或开关（``G`` 与右下角那颗开关是同一个开关）。
+        关着就打开）；``R``、``G`` 与左右方向键只在游戏画面生效，免得在开始界面或
+        自定义模式里误触改掉进度、开关或参数（``G`` 与右下角那颗开关是同一个开关）。
         这些快捷键等价于按了某个按钮，因此同样响一声音效；``Esc`` 除外（它只是关窗口），
         以及在游戏进行中按 Enter / 空格——那下什么也没发生，不该给反馈。
         """
@@ -398,6 +559,9 @@ class Game:
             "settings-back": self.leave_settings,
             "toggle-music": self.toggle_music,
             "toggle-sound": self.toggle_sound,
+            "custom": self.show_custom,
+            "custom-start": self.start_custom,
+            "custom-reroll": self.reroll_custom,
         }
         handler = actions.get(action)
         if handler is None:
@@ -422,6 +586,11 @@ class Game:
                 self.audio.sound_enabled,
                 mouse,
             )
+        elif self.scene is Scene.CUSTOM:
+            # 先画背景、标题、滑动条与页脚按钮，再把预览棋盘贴到中间那块留白上
+            # （两者不重叠，见 `ui.custom_preview_area`）。
+            ui.draw_custom_screen(self.screen, self.custom, mouse)
+            self.custom_board.draw(self.screen)
         else:
             ui.draw_start_screen(self.screen, self.session, mouse)
         pygame.display.flip()

@@ -90,7 +90,37 @@
 15. （已实现：删掉渐变 / 投影 / 光晕，背景与组件全部改成纯色 + 1px 描边，圆角统一为 12；信息栏由四块卡片合并为一条通栏，见 `change-log-19-ui-flattening.md`）UI/UX 整体优化：重构 UI 设计，扁平、简洁为上。
 16. （已实现：背景音乐从窗口打开循环到退出（`start_music()` 幂等，不随画面重播）；按钮 / 快捷键 / 箭头飞出 / 撞墙 / 通关 / 失败各配一声音效，点空与结算界面的无效点击不响；素材在包内 `assets/sounds/`，没有声卡或缺素材时静默降级，音乐 0.35 / 音效 0.7 两条音量，见 `change-log-21-music-and-sound.md`）引入音乐和音效
 17. （已实现：新增“设置”菜单页（`Scene.SETTINGS`），两个滑动开关分别控制背景音乐与音效；入口是开始界面页脚的“设置”按钮与游戏中的 `S` 键，页脚“返回”回到打开它的那个画面——中途进设置不丢关卡进度也不计时；静音拦在 `Audio` 的播放层（`music_enabled` / `sound_enabled`），开关不落盘、关闭程序后恢复默认，见 `change-log-22-audio-settings.md`）设置：允许开关音乐和音效
-18. （已实现：字重从三个减到两个（Regular / Bold），副标题与页脚提示改用 Regular + 暗色（`COLOR_TEXT_MUTED`），不再靠字重变细；两个字重都用 fontTools **子集化**到游戏会画的 254 个字（每个 16 MB → 80 KB），并按 OFL 1.1 把修改版**改名为 `SHSSubset SC`**（版权与许可声明原样保留），完整性由 `tests/test_font_subset.py` 钉住，见 `change-log-27-font-subset.md` 与 `change-log-28-font-rename.md`）打包体积优化：去除 Light 字重，仅作 Regular-Bold 两级变化；导出游戏文本，做字体子集化
+18. （已实现：字重从三个减到两个（Regular / Bold），副标题与页脚提示改用 Regular + 暗色（`COLOR_TEXT_MUTED`），不再靠字重变细；两个字重都用 fontTools **子集化**到游戏会画的 263 个字（每个 16 MB → 约 80 KB），并按 OFL 1.1 把修改版**改名为 `SHSSubset SC`**（版权与许可声明原样保留），完整性由 `tests/test_font_subset.py` 钉住，见 `change-log-27-font-subset.md` 与 `change-log-28-font-rename.md`）打包体积优化：去除 Light 字重，仅作 Regular-Bold 两级变化；导出游戏文本，做字体子集化
+19. （已实现：开始界面的主按钮行拆成两个并排入口——金色“关卡模式”与次色“自定义模式”；自定义模式（`Scene.CUSTOM`）用两行滑动条调**棋盘边长**（4~16）与**箭头数量**（1 ~ 格子数的一半），中间那块棋盘是**实时预览**，参数一动就重新生成；生成逻辑在新模块 `custom.py`（参数夹取、确定性种子、按参数缓存），范围由实测数据定，`tests/test_custom.py` 逐组校验“范围内每一组参数都生成得出来”；自定义关卡用 `Session(is_custom=True)` 的单关会话玩，界面报“自定义”/“再玩一次”，见 `change-log-29-custom-mode.md`）“自定义模式”：通过调整参数实时生成关卡；“开始游戏”分裂成“关卡模式”和“自定义模式”
+
+## 自定义模式（2026-09-24，`change-log-29-custom-mode.md`）
+
+事项 19 已落地：开始界面是**两个并排入口**（金色“关卡模式” + 次色“自定义模式”，
+图标 `Icon.SLIDERS`），后者是独立画面 `Scene.CUSTOM`（标题下面的预览区 → 两行滑动条 →
+页脚“返回 / 换一关 / 开始游戏”）。
+
+- **参数范围是实测定的**：棋盘边长 4~16，箭头数量 1 ~ **格子数的一半**（8x8 默认 26）。
+  密度超过 0.55 后逆向构造开始频繁重试（16x16 / 154 支要 319 ms，还会 200 次重试后失败），
+  卡到 0.5 之后最慢 3.5 ms；16x16 把箭头条从 1 拖到 128 支共 198 ms（平均 1.5 ms/关）。
+  **改范围只动 `custom.py` 顶部的常量**，`tests/test_custom.py` 的全范围测试会先报警；
+- **实时生成**：`custom.CustomLevel` 持参数 + 关卡，参数一变就重新生成；
+  **同一组参数永远同一关**（种子由 `seed_for` 算出、不是抽出来的；`reroll()` 换的是“批次”），
+  因此预览稳定、结果可按参数缓存、测试可复现。参数一律夹到合法区间，界面不判边界；
+- **预览是真棋盘**：`Game.custom_board` 就是一块 `Board`（只画不点）：参数变则重建，
+  窗口缩放时与主棋盘一起 `reshape`；预览区 184~540、滑动条 556~612，两者不重叠
+  （4x4 ~ 16x16 逐尺寸有测试）；
+- **滑动条**：`ui.SliderRow` + `custom_slider_rows()`（绘制与命中判定同源）+ `slider_value()`
+  （与 `_slider_thumb_x` 共用一套正反映射）；拖动靠 `Game._dragging_slider` + `MOUSEMOTION`，
+  `MOUSEBUTTONUP` 收尾；读数一侧按量程上限预留宽度（拖动时轨道不变形）；
+  **滑动条不发声**（拖动是连续操作），页脚按钮照旧响一声音效；
+- **规则层不知道“自定义”**：`start_custom()` 只是开一个
+  `Session(levels=(这一关,), is_custom=True)`，`is_custom` 只改三处报读
+  （信息栏报“自定义”、结算正文、主按钮“再玩一次”）。**切回关卡模式会重建会话**
+  （否则会接着玩那一关），自定义关卡不带教程（`_needs_tutorial` 本来就要求
+  `levels == LEVELS`）；
+- **信息栏第 1 格 92 → 112**：要放下“自定义”（三个 24 号字 = 72px），
+  末格（失误圆点）由按钮左侧倒推、从 89 匀到 69，720 的宽度账不变；
+- 自定义参数**不落盘**，与音频开关同一条口径（关掉程序回到默认的 8x8）。
 
 ## 字体与打包体积（2026-09-24，`change-log-27-font-subset.md` / `change-log-28-font-rename.md`）
 
@@ -98,7 +128,7 @@
 
 - **两个字重**：`assets/fonts/SHSSubsetSC-{Regular,Bold}.otf`（`resources.BUNDLED_WEIGHTS`，
   Light 已删掉）。界面层级只剩“字号 + Bold 一级强调”，次要文字靠更小的字号与 `COLOR_TEXT_MUTED` 退到背景里；
-- **子集化**：只保留游戏会画出来的 254 个字（含整段 ASCII 可打印字符），两个文件共 160 KB；
+- **子集化**：只保留游戏会画出来的 263 个字（含整段 ASCII 可打印字符），两个文件共 158 KB；
   未子集化的完整静态字重每人约 16 MB。字形轮廓与度量原样保留（Regular 同一行 690px、Bold 701px，与子集化前一致）；
 - **改名**：修改版不沿用上游名（OFL 1.1），字体内部族名是 `resources.FONT_FAMILY`（`SHSSubset SC`），
   PostScript 名与**文件名**都是 `SHSSubsetSC-{Regular,Bold}`（`resources.FONT_STEM`），

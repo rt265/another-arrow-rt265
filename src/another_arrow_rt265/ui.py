@@ -10,11 +10,14 @@
 绘制里遇到设计长度（半径、留白、行距、字号……）时用 :func:`another_arrow_rt265.viewport.s`
 现算，而 `rect.height // 2` 这类由矩形派生的值本身就是像素，不要再换算一次。
 
-窗口一共有四类画面：
+窗口一共有五类画面：
 
 - 菜单页：大标题 + 副标题 +（可选）方向箭头装饰 +（可选）主按钮+ 若干开关行
   + 若干说明卡片 + 提示行 + 页脚按钮。开始界面、关于界面与设置界面都是菜单页，
   只是内容不同；
+- 自定义模式：标题下面是一大片**实时预览**（一块真正的 ``Board``，由 ``Game`` 画在
+  这里返回的 :func:`custom_preview_area` 里），底下是两行参数滑动条与页脚按钮
+  ——它不套菜单页的竖栏排版，因为那套排版里没有地方放棋盘（见 :func:`draw_custom_screen`）；
 - 进行中：一条整宽信息栏（左侧“回到主界面”、中间四段统计分区、右侧“重新开始”
   按钮，分区之间用 1px 竖直分隔线隔开，见 :func:`draw_hud`），加上右下角
   “辅助线”开关（见 :func:`draw_guide_toggle`）；
@@ -28,6 +31,10 @@
 只声明一个动作名，由 :meth:`~another_arrow_rt265.game.Game._run_action` 分发。
 因此**新增一个界面（关卡选择……）只需要写一个 :class:`MenuPage` 常量，
 再在动作表里补一行**，不必再写一遍排版、绘制与事件分发代码。
+（自定义模式是例外：它的两行滑动条与实时预览不是菜单页的内容块，
+另有 :func:`custom_slider_rows` / :func:`custom_preview_area` 与
+:func:`_draw_slider_row`；但它的**页脚按钮仍然走菜单页那一套**，
+所以“返回 / 换一关 / 开始游戏”与其它页面落在同一条线上。）
 
 组件的视觉效果统一由 :func:`_draw_panel` / :func:`_draw_primary_button` /
 :func:`_draw_secondary_button` 提供：**纯色圆角底板 + 1px 描边**。扁平化之后不再有渐变、
@@ -50,7 +57,15 @@ from typing import Final
 
 import pygame
 
-from another_arrow_rt265 import config, icons, resources, sprites, tutorial, viewport
+from another_arrow_rt265 import (
+    config,
+    custom,
+    icons,
+    resources,
+    sprites,
+    tutorial,
+    viewport,
+)
 from another_arrow_rt265.direction import Direction
 from another_arrow_rt265.session import GameStatus, Session
 
@@ -111,14 +126,16 @@ _TEXT_VALUE: Final[_TextStyle] = _TextStyle(24, resources.FontWeight.BOLD)
 # 四段统计分区（关卡 / 剩余箭头 / 用时 / 失误）、右侧“重新开始”按钮，分区之间用
 # 1px 竖直分隔线隔开。窗口宽度有限，整行则好铺满一行，改动任何一项宽度前
 # 先把下面这行 720 的账重新算一遍：
-#   32 + 48 + 12 + 92 + (8+1+8) + 92 + (8+1+8) + 122 + (8+1+8) + 89 + 10 + 140 + 32
+#   32 + 48 + 12 + 112 + (8+1+8) + 92 + (8+1+8) + 122 + (8+1+8) + 69 + 10 + 140 + 32
 # 分区宽度按“最宽的那行字 + 两侧留白”取：用时读数最长（“99:59.9”），
-# “剩余箭头”四个字则决定了第二段的下限。
+# “剩余箭头”四个字则决定了第二段的下限；第一段要放下自定义模式的“自定义”
+# （三个 24 号字 = 72px）。末段是按“重新开始按钮的左边”倒推的，
+# 所以第一段变宽的 20px 是从末段匀过去的（失误圆点只有三颗、共占 58px，撑得住）。
 _HUD_ICON_BUTTON_SIZE: Final[tuple[int, int]] = (48, 48)
 _HUD_NAV_GAP: Final[int] = 12
 _HUD_CHIP_HEIGHT: Final[int] = 72
-# 最后一段只用于起手，它的实际宽度由“重新开始按钮的左边”倒推（见 hud_chip_rects）。
-_HUD_CHIP_WIDTHS: Final[tuple[int, int, int, int]] = (92, 92, 122, 89)
+# 末段的宽度必须与倒推出来的右边距吻合（它贴住“重新开始”按钮的左侧）。
+_HUD_CHIP_WIDTHS: Final[tuple[int, int, int, int]] = (112, 92, 122, 69)
 # 分区之间的 1px 分隔线及其两侧留白：相邻两段分区之间共占 2 * 8 + 1 = 17。
 _HUD_DIVIDER_GAP: Final[int] = 8
 _HUD_DIVIDER_WIDTH: Final[int] = 1
@@ -207,6 +224,20 @@ _SECTION_BOTTOM_PADDING: Final[int] = 8
 _PAGE_TOGGLE_HEIGHT: Final[int] = 72
 _PAGE_TOGGLE_PADDING: Final[int] = _SECTION_PADDING
 
+# 自定义模式：唯一“控件 + 实时预览”同屏的画面。标题比别的页面高一点（108 而不是 126），
+# 把省下来的高度让给预览；标题下面依次是预览区（棋盘自己在里面居中摆放）、
+# 两行参数控件（左右并排，各占一半宽）与页脚按钮。页脚照旧走 `_footer_row_rects`，
+# 因此“返回 / 换一关 / 开始游戏”与其它页面的页脚落在同一条线上。
+_CUSTOM_TITLE_Y: Final[int] = 108
+_CUSTOM_SUBTITLE_Y: Final[int] = 160
+_CUSTOM_PREVIEW_TOP: Final[int] = 184
+_CUSTOM_PREVIEW_BOTTOM: Final[int] = 540
+_CUSTOM_CONTROL_TOP: Final[int] = 556
+_CUSTOM_CONTROL_HEIGHT: Final[int] = 56
+_CUSTOM_CONTROL_GAP: Final[int] = 8
+# 一行参数控件里“标签 → 轨道”与“轨道 → 读数”之间的间隙。
+_CUSTOM_LABEL_GAP: Final[int] = 12
+
 # 教程提示条（只出现在第 1 关）：左侧是“第几步 / 共几步”，中间一句话指引，
 # 右侧是“跳过教程”；同时给待点击的箭头套一圈呼吸高亮，把“点哪里”直接画出来。
 _TUTORIAL_BAR_PADDING: Final[int] = 14
@@ -289,6 +320,35 @@ class MenuToggle:
 
 
 @dataclass(frozen=True)
+class SliderRow:
+    """一行“标签 + 滑动条 + 读数”的参数控件（自定义模式用）。
+
+    与 :class:`MenuButton` / :class:`MenuToggle` 一样只声明“改哪个参数 + 当前取值”：
+    ``key`` 交给 ``Game._set_custom_parameter`` 分发，几何则全由
+    :func:`custom_slider_rows` 算好（绘制与命中判定读的是同一份，画在哪里就能拖哪里）。
+
+    读数一侧在排版时按量程上限 ``maximum`` 预留宽度，因此取值位数变化（8 与 128）
+    不会把轨道挤来挤去——拖动时轨道的量程必须纹丝不动，否则滑块会因为
+    “轨道变短→取值回退→轨道又变长”而抽一下。
+    """
+
+    key: str
+    """参数的名称：``"size"``（棋盘边长）或 ``"arrows"``（箭头数量）。"""
+    label: str
+    """行首标签。"""
+    value: int
+    """当前取值。"""
+    minimum: int
+    """量程下限。"""
+    maximum: int
+    """量程上限。"""
+    rect: pygame.Rect
+    """整行的区域（屏幕坐标）。"""
+    track: pygame.Rect
+    """轨道的区域（屏幕坐标）。"""
+
+
+@dataclass(frozen=True)
 class MenuPage:
     """一个菜单页的内容描述（排版由 :func:`menu_layout` 统一算出来）。"""
 
@@ -323,8 +383,10 @@ def start_page(total_levels: int, max_mistakes: int) -> MenuPage:
     """返回开始界面的页面描述。
 
     开始界面刻意不放任何文字说明：规则改由第 1 关的交互式教程边玩边教
-    （见 :func:`draw_tutorial`），屏幕只留标题、方向箭头装饰与三个入口
-    （主按钮“开始游戏” + 页脚的“设置 / 关于”）。
+    （见 :func:`draw_tutorial`），屏幕只留标题、方向箭头装饰与入口。
+    “开始游戏”在事项 19 拆成了并排的两个入口：**关卡模式**（内置关卡，主按钮）
+    与**自定义模式**（自己调参数生成关卡），它们同占主按钮那一行，
+    页脚仍是“设置 / 关于”。
 
     Args:
         total_levels: 关卡总数。开始界面不展示这个数字（关卡进度只在信息栏里出现），
@@ -337,15 +399,48 @@ def start_page(total_levels: int, max_mistakes: int) -> MenuPage:
         buttons=(
             MenuButton(
                 "start",
-                "开始游戏",
+                "关卡模式",
                 icons.Icon.NEXT,
                 primary=True,
+                placement=MenuButtonPlacement.HERO,
+            ),
+            MenuButton(
+                "custom",
+                "自定义模式",
+                icons.Icon.SLIDERS,
                 placement=MenuButtonPlacement.HERO,
             ),
             MenuButton("settings", "设置", icons.Icon.SETTINGS),
             MenuButton("about", "关于", icons.Icon.INFO),
         ),
         decorations=True,
+    )
+
+
+@functools.cache
+def custom_page() -> MenuPage:
+    """返回“自定义模式”页面的描述。
+
+    这里**只有标题与页脚按钮**：两行参数滑动条与实时预览不是菜单页的内容块，
+    它们另有自己的几何函数（:func:`custom_slider_rows` / :func:`custom_preview_area`），
+    由 :func:`draw_custom_screen` 与 ``Game`` 分别绘制。
+
+    页脚从左到右是“返回 / 换一关 / 开始游戏”：开始游戏是主按钮（金色），
+    因此 Enter / 空格进来就是“开始玩这一关”（见 :meth:`MenuPage.default_action`）。
+    """
+    return MenuPage(
+        title="自定义模式",
+        subtitle="CUSTOM",
+        buttons=(
+            MenuButton("home", "返回", icons.Icon.BACK),
+            MenuButton("custom-reroll", "换一关", icons.Icon.RESTART),
+            MenuButton(
+                "custom-start",
+                "开始游戏",
+                icons.Icon.NEXT,
+                primary=True,
+            ),
+        ),
     )
 
 
@@ -717,8 +812,17 @@ def _guide_toggle_track_rect() -> pygame.Rect:
 
 
 def start_button_rect() -> pygame.Rect:
-    """返回开始界面上“开始游戏”按钮的区域。"""
-    return viewport.map(_hero_row_rects(1)[0])
+    """返回开始界面上“关卡模式”按钮的区域（主按钮行的左侧）。"""
+    return viewport.map(_hero_row_rects(2)[0])
+
+
+def custom_button_rect() -> pygame.Rect:
+    """返回开始界面上“自定义模式”按钮的区域（主按钮行的右侧）。
+
+    与 :func:`start_button_rect` 并排占用同一行：两者是同一件事的两种玩法，
+    因此共享主按钮的位置，只是“关卡模式”是主按钮（金色）、这个是次要按钮。
+    """
+    return viewport.map(_hero_row_rects(2)[1])
 
 
 def _home_footer_rects() -> tuple[pygame.Rect, pygame.Rect]:
@@ -749,6 +853,124 @@ def about_back_button_rect() -> pygame.Rect:
 def settings_back_button_rect() -> pygame.Rect:
     """返回“设置”界面页脚“返回”按钮的区域。"""
     return viewport.map(_footer_row_rects(1)[0])
+
+
+# ---------------------------------------------------------------- 自定义模式
+# 这个画面只有两处几何是它独有的：预览区与两行参数控件。页脚按钮与其它页面
+# 共用 `_footer_row_rects`（页面描述见 `custom_page()`），因此不必再算一遍。
+
+
+def custom_preview_area() -> pygame.Rect:
+    """返回自定义模式里**预览棋盘**的可用区域（屏幕坐标）。
+
+    棋盘会在这个区域里居中摆放，因此这里返回的是“能用的地方”而不是棋盘本身；
+    尺寸跟着格子走，所以窗口缩放时预览与游戏里的棋盘一样会一起变大。
+    """
+    return viewport.rect(
+        config.HUD_PADDING,
+        _CUSTOM_PREVIEW_TOP,
+        config.WINDOW_WIDTH - 2 * config.HUD_PADDING,
+        _CUSTOM_PREVIEW_BOTTOM - _CUSTOM_PREVIEW_TOP,
+    )
+
+
+def _custom_control_rows() -> tuple[pygame.Rect, pygame.Rect]:
+    """设计坐标下自定义模式两行参数控件的区域（左右并排，各占一半宽）。"""
+    total = config.WINDOW_WIDTH - 2 * config.HUD_PADDING
+    width = (total - _CUSTOM_CONTROL_GAP) // 2
+    first = pygame.Rect(
+        config.HUD_PADDING, _CUSTOM_CONTROL_TOP, width, _CUSTOM_CONTROL_HEIGHT
+    )
+    second = first.copy()
+    second.left = first.right + _CUSTOM_CONTROL_GAP
+    return (first, second)
+
+
+def _slider_track_rect(row: pygame.Rect, label: str, maximum: int) -> pygame.Rect:
+    """返回一行参数控件里滑动条轨道的区域（设计坐标的 ``row`` 换来的屏幕坐标）。
+
+    轨道夹在左侧标签与右侧读数之间；读数一侧按量程上限 ``maximum`` 预留宽度，
+    因此取值位数变化（8 与 128）不会把轨道挤来挤去——拖到一半轨道突然变短，
+    滑块下的取值就会跟着回退，看起来像在抖。
+    """
+    padding = viewport.s(config.SLIDER_TRACK_PADDING)
+    gap = viewport.s(_CUSTOM_LABEL_GAP)
+    label_width = _TEXT_LABEL.font().render(label, True, config.COLOR_TEXT).get_width()
+    value_width = (
+        _TEXT_VALUE.font().render(str(maximum), True, config.COLOR_TEXT).get_width()
+    )
+    height = viewport.s(config.SLIDER_TRACK_HEIGHT)
+    left = row.left + padding + label_width + gap
+    right = row.right - padding - value_width - gap
+    return pygame.Rect(left, row.centery - height // 2, max(1, right - left), height)
+
+
+def custom_slider_rows(
+    size: int, arrows: int, max_arrows: int
+) -> tuple[SliderRow, ...]:
+    """返回自定义模式两行参数控件的几何（屏幕坐标）。
+
+    Args:
+        size: 棋盘边长（当前取值）。
+        arrows: 箭头数量（当前取值）。
+        max_arrows: 当前边长下的箭头数量上限，也就是这一行的量程上限
+            （见 :func:`another_arrow_rt265.custom.max_arrows`）。
+
+    Returns:
+        ``(棋盘边长, 箭头数量)`` 两行，绘制与命中判定都读这一份。
+    """
+    descriptors = (
+        ("size", "棋盘边长", size, custom.MIN_SIZE, custom.MAX_SIZE),
+        ("arrows", "箭头数量", arrows, custom.MIN_ARROWS, max_arrows),
+    )
+    rows: list[SliderRow] = []
+    for (key, label, value, minimum, maximum), design in zip(
+        descriptors, _custom_control_rows(), strict=True
+    ):
+        rect = viewport.map(design)
+        rows.append(
+            SliderRow(
+                key=key,
+                label=label,
+                value=value,
+                minimum=minimum,
+                maximum=maximum,
+                rect=rect,
+                track=_slider_track_rect(rect, label, maximum),
+            )
+        )
+    return tuple(rows)
+
+
+def _slider_thumb_span(row: SliderRow) -> tuple[int, int]:
+    """返回滑块圆心可以移动的横坐标范围（两端各让出半个滑块）。"""
+    radius = viewport.s(config.SLIDER_THUMB_RADIUS)
+    return (row.track.left + radius, row.track.right - radius)
+
+
+def _slider_thumb_x(row: SliderRow) -> int:
+    """返回当前取值下滑块圆心的横坐标。"""
+    left, right = _slider_thumb_span(row)
+    span = row.maximum - row.minimum
+    if span <= 0:
+        return left
+    ratio = (row.value - row.minimum) / span
+    return round(left + min(1.0, max(0.0, ratio)) * (right - left))
+
+
+def slider_value(row: SliderRow, x: int) -> int:
+    """把滑动条上的横坐标换算成参数取值（夹在量程内，四舍五入到最近的整数）。
+
+    与 :func:`_slider_thumb_x` 是同一套映射的正反两向，因此“点哪里就取哪个值”，
+    取到的值反过来画出来的滑块也正好落在手指下面；量程在像素上很窄时
+    （16x16 的箭头数量有 128 档）一格还不到一个像素，四舍五入只是让它有个确定的结果。
+    """
+    left, right = _slider_thumb_span(row)
+    if right <= left:
+        return row.minimum
+    ratio = (x - left) / (right - left)
+    ratio = min(1.0, max(0.0, ratio))
+    return row.minimum + round(ratio * (row.maximum - row.minimum))
 
 
 def _stack_sections(
@@ -930,10 +1152,13 @@ def overlay_button_text(session: Session) -> str:
     """返回结算界面主按钮的文案，与 ``Session`` 的流转保持一致。
 
     “回到主界面”始终由旁边的次要按钮提供，因此最后一关通关时主按钮
-    改为“再来一轮”，不重复同一个动作。
+    改为“再来一轮”，不重复同一个动作；自定义关卡没有“下一关”，它是**唯一**的一关，
+    因此通关后是“再玩一次”（同一个会话里的 ``advance()`` 会重新载入这一关）。
     """
     if session.status is GameStatus.FAILED:
         return "重试本关"
+    if session.is_custom:
+        return "再玩一次"
     return "再来一轮" if session.is_last_level else "下一关"
 
 
@@ -1012,6 +1237,17 @@ def _draw_hud_bar(surface: pygame.Surface) -> None:
         pygame.draw.line(surface, config.COLOR_PANEL_BORDER, (x, top), (x, bottom))
 
 
+def level_chip_text(session: Session) -> str:
+    """返回信息栏“关卡”分区的读数。
+
+    自定义模式只有一关（而且没有“下一关”这回事），报“1 / 1”是误导，
+    因此改报它的身份：“自定义”。
+    """
+    if session.is_custom:
+        return "自定义"
+    return f"{session.level_number} / {session.total_levels}"
+
+
 def draw_hud(
     surface: pygame.Surface,
     session: Session,
@@ -1031,7 +1267,7 @@ def draw_hud(
         surface,
         level_rect,
         "关卡",
-        f"{session.level_number} / {session.total_levels}",
+        level_chip_text(session),
         config.COLOR_PRIMARY,
     )
     _draw_stat_chip(
@@ -1145,6 +1381,63 @@ def draw_guide_toggle(
         enabled,
         mouse,
         style=_TEXT_LABEL,
+    )
+
+
+def _draw_slider_row(
+    surface: pygame.Surface,
+    row: SliderRow,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """画一行参数控件：左边标签、右边读数，中间一条滑动条。
+
+    轨道是胶囊、滑块是正圆——与滑动开关同一种“连续量”的形状语义
+    （见 :data:`config.UI_RADIUS` 的例外说明）；用色正好相反：开关靠滑块偏向哪侧
+    表达开与关，滑动条则把**滑过的那一段**填成主色，于是“调到哪儿了”从颜色与滑块
+    两处都看得出来。
+
+    悬停只把描边与标签提亮一档（不像开关那样整块换底色）：滑动条本身是一条连续的
+    轨道，整块变亮会让人以为“点一下就能开”。
+    """
+    hovered = mouse is not None and row.rect.collidepoint(mouse)
+    _draw_panel(
+        surface,
+        row.rect,
+        config.COLOR_PANEL,
+        radius=viewport.s(config.UI_RADIUS),
+        border=config.COLOR_BUTTON_BORDER if hovered else config.COLOR_PANEL_BORDER,
+    )
+
+    padding = viewport.s(config.SLIDER_TRACK_PADDING)
+    label = _TEXT_LABEL.font().render(
+        row.label, True, config.COLOR_TEXT if hovered else config.COLOR_TEXT_MUTED
+    )
+    surface.blit(
+        label,
+        label.get_rect(midleft=(row.rect.left + padding, row.rect.centery)),
+    )
+    value = _TEXT_VALUE.font().render(str(row.value), True, config.COLOR_TEXT)
+    surface.blit(
+        value,
+        value.get_rect(midright=(row.rect.right - padding, row.rect.centery)),
+    )
+
+    radius = row.track.height // 2
+    sprites.blit_round_rect(surface, row.track, radius, config.SLIDER_TRACK_REST)
+    thumb_x = _slider_thumb_x(row)
+    filled = pygame.Rect(
+        row.track.left,
+        row.track.top,
+        thumb_x - row.track.left,
+        row.track.height,
+    )
+    if filled.width > 0:
+        sprites.blit_round_rect(surface, filled, radius, config.SLIDER_TRACK_FILL)
+    sprites.blit_circle(
+        surface,
+        (thumb_x, row.track.centery),
+        viewport.s(config.SLIDER_THUMB_RADIUS),
+        config.SLIDER_THUMB,
     )
 
 
@@ -1514,6 +1807,36 @@ def draw_settings_screen(
     draw_menu_page(surface, settings_page(music_enabled, sound_enabled), mouse)
 
 
+def draw_custom_screen(
+    surface: pygame.Surface,
+    settings: custom.CustomLevel,
+    mouse: tuple[int, int] | None = None,
+) -> None:
+    """绘制“自定义模式”画面：标题、两行参数滑动条与页脚按钮（连背景一起画）。
+
+    **预览棋盘不在这里画**：它由 ``Game`` 拿一块真正的 ``Board`` 画在
+    :func:`custom_preview_area` 里（在调用本函数**之后**贴上去），因此预览的箭头、
+    配色与动画跟游戏里完全一致，而不是另画一套小样例。
+
+    Args:
+        surface: 绘制目标。
+        settings: 当前的参数（两个滑动条的取值与量程都来自它）。
+        mouse: 鼠标位置，仅用于滑动条与页脚按钮的悬停高亮。
+    """
+    draw_background(surface)
+    page = custom_page()
+    _draw_page_title(
+        surface,
+        page,
+        title_y=_CUSTOM_TITLE_Y,
+        subtitle_y=_CUSTOM_SUBTITLE_Y,
+    )
+    for row in custom_slider_rows(settings.size, settings.arrows, settings.max_arrows):
+        _draw_slider_row(surface, row, mouse)
+    for button, rect in menu_layout(page).buttons:
+        _draw_menu_button(surface, button, rect, mouse)
+
+
 def draw_about_screen(
     surface: pygame.Surface,
     session: Session,
@@ -1531,23 +1854,33 @@ def draw_about_screen(
     )
 
 
-def _draw_page_title(surface: pygame.Surface, page: MenuPage) -> None:
+def _draw_page_title(
+    surface: pygame.Surface,
+    page: MenuPage,
+    *,
+    title_y: int = _PAGE_TITLE_Y,
+    subtitle_y: int = _PAGE_SUBTITLE_Y,
+) -> None:
     """画菜单页的标题：主色文字 + 拉开字距的英文副标题。
 
     扁平化之前标题下面垫了一份半透明的金色副本当光晕，现在只留一层文字：
     标题本身已经是全屏最大的字号，不需要再额外强调。
+
+    ``title_y`` / ``subtitle_y`` 是设计坐标下的两条基线中心，默认就是菜单页的
+    标准位置；自定义模式要腾出一大片预览区，因此把标题整体上提（见
+    :data:`_CUSTOM_TITLE_Y`），字号与配色都不变。
     """
     center_x = viewport.center()[0]
 
     title = _TEXT_HERO.font().render(page.title, True, config.COLOR_TEXT)
-    surface.blit(title, title.get_rect(center=(center_x, viewport.y(_PAGE_TITLE_Y))))
+    surface.blit(title, title.get_rect(center=(center_x, viewport.y(title_y))))
 
     subtitle = _TEXT_SUBTITLE.font().render(
         " ".join(page.subtitle), True, config.COLOR_TEXT_MUTED
     )
     surface.blit(
         subtitle,
-        subtitle.get_rect(center=(center_x, viewport.y(_PAGE_SUBTITLE_Y))),
+        subtitle.get_rect(center=(center_x, viewport.y(subtitle_y))),
     )
 
 
@@ -1658,7 +1991,11 @@ def _draw_menu_toggle(
 def _result_message(session: Session) -> str:
     """返回结算卡片的正文文案。"""
     if session.status is GameStatus.FAILED:
+        if session.is_custom:
+            return "失误次数已用完，本关未通过"
         return f"失误次数已用完，第 {session.level_number} 关未通过"
+    if session.is_custom:
+        return "自定义关卡已通关"
     if session.is_last_level:
         return f"全部 {session.total_levels} 关已通关"
     return f"剩余失误 {session.mistakes_left} 次"
