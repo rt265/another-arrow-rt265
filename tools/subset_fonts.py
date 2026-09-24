@@ -26,6 +26,10 @@
 
     uv run python tools/subset_fonts.py
 
+本地还没有完整字重（比如刚克隆仓库、或换了机器）时，加 ``--download`` 让脚本自己从上游取：
+
+    uv run python tools/subset_fonts.py --download
+
 子集化后的字体仍然基于 Noto Sans CJK SC（OFL-1.1，允许修改与再分发，见
 ``THIRD-PARTY.md`` 的“是否修改”一栏），但族名已经换成 :data:`resources.FONT_FAMILY`。
 ``tests/test_font_subset.py`` 会检查“包内字体覆盖了游戏全部文字”与“字体名、版权声明各就各位”，
@@ -37,6 +41,7 @@ from __future__ import annotations
 import argparse
 import ast
 import sys
+import urllib.request
 from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Final
@@ -59,6 +64,11 @@ DEFAULT_TEXT_OUTPUT: Final[Path] = REPO_ROOT / "build" / "game-text.txt"
 #: 产物则是 :func:`resources.font_file_name`（``SHSSubsetSC-<字重>.otf``）。
 SOURCE_FAMILY_NAME: Final[str] = "Noto Sans CJK SC"
 SOURCE_FONT_STEM: Final[str] = "NotoSansCJKsc"
+#: 源字体从上游哪里取（``--download`` 用；仅本机生成字体时联网）。
+SOURCE_URL: Final[str] = (
+    "https://github.com/notofonts/noto-cjk/raw/main"
+    "/Sans/OTF/SimplifiedChinese/{file_name}"
+)
 
 #: 动态文字用到的字符：运行时算出来的数字、时间、英文都在这一段里。
 ASCII_PRINTABLE: Final[str] = "".join(chr(code) for code in range(0x20, 0x7F))
@@ -176,6 +186,17 @@ def subset_font(
         font.close()
 
 
+def download_source(source: Path) -> None:
+    """从上游下载完整字体到 ``source``（换机器 / 新克隆后没有源字体时用）。"""
+    url = SOURCE_URL.format(file_name=source.name)
+    print(f"下载源字体：{url}")
+    with urllib.request.urlopen(url) as response:
+        data = response.read()
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(data)
+    print(f"  → {source}（{len(data) / 1e6:.1f} MB）")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """命令行入口的参数表。"""
     parser = argparse.ArgumentParser(
@@ -198,6 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="只导出游戏文本，不动字体文件",
     )
+    parser.add_argument(
+        "--download",
+        action="store_true",
+        help="源字体不在 --source-directory 里时，先从上游下载",
+    )
     return parser
 
 
@@ -217,13 +243,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         source_name = f"{SOURCE_FONT_STEM}-{weight.value}.otf"
         source = arguments.source_directory / source_name
         if not source.is_file():
-            print(f"缺少源字体：{source}", file=sys.stderr)
-            print(
-                f"完整字重不进仓库，把上游的 {source_name} 放到上面那个目录再跑一次"
-                "（下载地址见 tools/subset_fonts.py 的模块说明）。",
-                file=sys.stderr,
-            )
-            return 1
+            if not arguments.download:
+                print(f"缺少源字体：{source}", file=sys.stderr)
+                print(
+                    f"完整字重不进仓库：把上游的 {source_name} 放到上面那个目录，"
+                    "或者加 --download 让脚本自己取（下载地址见模块说明）。",
+                    file=sys.stderr,
+                )
+                return 1
+            download_source(source)
 
         target = FONT_DIRECTORY / file_name
         before = target.stat().st_size if target.is_file() else source.stat().st_size

@@ -178,17 +178,23 @@ graph LR
 
 ### 加一句界面文案
 
-`ui.py` / `tutorial.py` 等模块里的字符串字面量就是界面会画的字，直接改即可；但若引入了新字
-（新汉字、新符号），必须重新生成自带字体：
+`ui.py` / `tutorial.py` 等模块里的字符串字面量就是界面会画的字，直接改即可。
+
+**只有当新文案里出现了新字**（新汉字、新符号；数字 / 字母 / 常见 ASCII 符号已经整段带上）才需要重新生成自带字体：
 
 ```bash
-uv run python tools/subset_fonts.py
+uv run python tools/subset_fonts.py             # 用 build/fonts-full/ 里的完整字重重新切
+uv run python tools/subset_fonts.py --download  # 本机没有完整字重时（新克隆 / 换机器）先从上游取
 ```
 
 自带字体是**子集化 + 改名**的（口径见 `tools/subset_fonts.py` 的模块说明：它把源码字面量
 导成 `build/game-text.txt`，用 fontTools 把完整字重切到这批字上，再把族名换成
 `SHSSubset SC`）。漏了这一步，新字在界面里是空白方块（`pygame` 不报错），
-所以 `tests/test_font_subset.py` 会把这条约束先拦下来。
+所以 `tests/test_font_subset.py` 会把这条约束先拦下来——它的报错信息里就写着上面这条命令。
+
+改完文案顺手跑一遍四条校验命令：文案变长可能顶破卡片宽度，
+`tests/test_ui.py::test_menu_page_text_fits_inside_its_section`、
+`test_menu_page_hint_fits_inside_its_box` 与 `tests/test_tutorial.py` 里的文案量尺会先报警。
 
 ### 加一个音效
 
@@ -222,8 +228,9 @@ uv run python tools/subset_fonts.py
 | `.preview/frame_time.py` | 稳态每帧耗时（改渲染后对比性能） |
 | `.preview/font_check.py` | 并排渲染两个内置字重，肉眼确认字重生效、没有缺字 |
 | `.preview/probe_resources.py` | standalone 探针，验证打包产物里的资源定位是真的 |
+| `tools/subset_fonts.py` | 导出游戏文本 + 重新子集化 / 改名自带字体（改了界面文案、新增字后必跑） |
 
-`.preview/` 已在 `.gitignore` 里，临时脚本随手放这里即可。
+`.preview/` 已在 `.gitignore` 里，临时脚本随手放这里即可；`tools/` 里的脚本是仓库的一部分（要提交，会被 ruff / ty 检查）。
 
 ## 文档索引
 
