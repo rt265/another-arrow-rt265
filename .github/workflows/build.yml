@@ -164,6 +164,11 @@ jobs:
     permissions:
       contents: write   # gh release 需要写权限
     steps:
+      # gh 要靠本地 git 才能认出 owner/repo（否则报 "not a git repository"），
+      # 顺便把标签拉下来，下面的 --verify-tag 才有本地依据。
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
       - name: Download artifacts
         uses: actions/download-artifact@v8.0.1
         with:

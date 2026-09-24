@@ -164,3 +164,32 @@ job 名、`Resolve asset name` 的 `echo`、`upload-artifact` 的 name 三处都
 
 （未变的一个事实：非标签构建的版本位仍是短提交号而不是 `pyproject.toml` 的 `version`——
 CI 不解析 pyproject，短提交号也更便于定位是哪次构建。）
+
+## 7. 修复：`release` 作业没 checkout，`gh` 认不出仓库
+
+打 `v4` 标签时 `Publish release` 这一步失败了，日志是：
+
+```text
+Run ls -l dist
+total 48160
+-rw-r--r-- 1 runner runner 33708888 Sep 24 06:24 another-arrow-v4-linux-x64.zip
+-rw-r--r-- 1 runner runner 15603987 Sep 24 06:24 another-arrow-v4-windows-x64.zip
+failed to run git: fatal: not a git repository (or any of the parent directories): .git
+```
+
+**根因**：`gh` 在没有 `--repo` 时要靠**本地 git** 才能推断出 `owner/repo`；
+`release` 作业只做了 `download-artifact`，全程没有 checkout，工作目录里根本没有 `.git`。
+附件本身是好的（两个 zip 都下载到位、`ls` 也列出来了），失败发生在它之后的 `gh release view`
+——所以报错看起来像“发布出了问题”，其实是“`gh` 找不到仓库”。
+
+**修法**：给 `release` 作业的第一步补 `actions/checkout@v7.0.1`，
+三条 `gh release` 命令一个字没改。没有选“给每条 `gh` 命令都加 `--repo "$GITHUB_REPOSITORY"`”
+那条路：加 `--repo` 确实也能让 `gh` 不依赖本地仓库，但 checkout 顺手把 git 上下文与标签
+都准备好了（`--verify-tag` 因此有本地依据），以后往这个作业里加 git / gh 命令也不会再踩。
+
+修复后的步骤顺序（`.preview/check_workflows.py` 里已加一条断言把它钉住）：
+`['Checkout', 'Download artifacts', 'Publish release']`。
+
+**教训**：**任何没有 checkout 的作业里跑 `gh`（或别的依赖 git 的命令）都会这样失败**；
+而它的报错出现在 `ls -l dist` 之后，很容易被误读成附件名 / 附件路径的问题。
+
