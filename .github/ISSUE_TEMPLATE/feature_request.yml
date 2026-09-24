@@ -1,0 +1,25 @@
+name: 功能请求
+description: 为本项目贡献 idea。
+title: "feat: "
+labels: [ "enhancement" ]
+body:
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 自查
+      description: |
+        在提交问题之前，请检查您是否已完成以下操作。
+      options:
+        - label: 我确认在报告之前我已经搜索了现有 issues，且没有类似功能提出。
+          required: true
+        - label: 我确认我已经检查，如果我不按照说明进行操作，该问题可能会被直接关闭。
+          required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: 描述
+      description: |
+        您想要什么新功能或改进？它有什么作用？请告诉我们新功能或改进是什么，并提供清晰详细的描述，如果可能，请添加截图以帮助解释。
+    validations:
+      required: true
+
